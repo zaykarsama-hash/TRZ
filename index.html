@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TRZ Master</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
 <style>
 :root{
   --bg:#060d18;--bg2:#0d1829;--bg3:#111f35;--card:#0f1e30;
@@ -324,7 +325,7 @@ function openModal(html){
   document.getElementById('modal-body').innerHTML = html;
   document.getElementById('modal-ov').classList.add('open');
 }
-function closeModal(){ document.getElementById('modal-ov').classList.remove('open'); }
+function closeModal(){ if(typeof stopQRCamera==='function') stopQRCamera(); document.getElementById('modal-ov').classList.remove('open'); }
 function modalOvClick(e){ if(e.target===document.getElementById('modal-ov')) closeModal(); }
 
 function toggleSidebar(){
@@ -436,14 +437,17 @@ function doRegisterTeacher(){
 }
 
 // ── REGISTER STUDENT ───────────────────────────────────────
-function showStudentReg(){
+function showStudentReg(prefillTid, prefillCid, viaQR){
+  var method = viaQR ? 'QR' : 'ID';
   openModal(
     '<div class="modal-title">الانضمام لفصل <button class="close-btn" onclick="closeModal()">✕</button></div>'+
+    (viaQR?'<div style="background:rgba(0,245,255,.08);border:1px solid #00f5ff;border-radius:8px;padding:8px 11px;margin-bottom:10px;font-size:.8rem;color:#00f5ff;">📱 تم الانضمام عبر QR الفصل — سيتم ملء البيانات تلقائياً</div>':'')+
     '<input class="inp" id="srn" placeholder="اسمك الكامل" />'+
     '<input class="inp" id="srph" placeholder="رقم هاتفك" />'+
-    '<input class="inp" id="srtid" placeholder="ID المعلم" />'+
-    '<input class="inp" id="srcid" placeholder="ID الفصل" />'+
+    '<input class="inp" id="srtid" placeholder="ID المعلم" value="'+(prefillTid||'')+'" '+(viaQR?'readonly style="opacity:.6;"':'')+' />'+
+    '<input class="inp" id="srcid" placeholder="ID الفصل" value="'+(prefillCid||'')+'" '+(viaQR?'readonly style="opacity:.6;"':'')+' />'+
     '<input class="inp" type="password" id="srpw" placeholder="كلمة مرور" />'+
+    '<input type="hidden" id="sr-method" value="'+method+'" />'+
     '<button class="btn btn-success" onclick="doRegisterStudent()">التسجيل</button>'
   );
 }
@@ -454,6 +458,7 @@ function doRegisterStudent(){
     var tid=(document.getElementById('srtid')||{}).value||''; tid=tid.trim();
     var cid=(document.getElementById('srcid')||{}).value||''; cid=cid.trim();
     var pw=(document.getElementById('srpw')||{}).value||'';
+    var method=(document.getElementById('sr-method')||{}).value||'ID';
     if(!name||!phone||!tid||!cid||!pw){ toast('أكمل الحقول','#ff3d6b',true); return; }
     FS.get('teachers',tid).then(function(teacher){
       if(!teacher){ toast('ID المعلم غير صحيح','#ff3d6b',true); return; }
@@ -462,7 +467,7 @@ function doRegisterStudent(){
         var sid = uid('S-');
         FS.set('students',sid,{name:name,phone:phone,password:pw,teacherId:tid,classId:cid,status:'pending',paid:false,attendance:{},scores:{},comments:[]}).then(function(){
           var pending = teacher.pending||[];
-          pending.push({sid:sid,name:name,phone:phone,classId:cid,via:'ID'});
+          pending.push({sid:sid,name:name,phone:phone,classId:cid,via:method});
           FS.update('teachers',tid,{pending:pending}).then(function(){
             closeModal(); toast('تم! انتظر موافقة المعلم. ID: '+sid);
           });
@@ -1073,15 +1078,16 @@ function deleteExam(eid){
 
 // ── QR ─────────────────────────────────────────────────────
 function showClassQR(cid){
+  var joinUrl = 'https://zaykarsama-hash.github.io/TRZ/?join=1&cid='+cid+'&tid='+CU.id;
   openModal(
     '<div class="modal-title">📱 QR الفصل <button class="close-btn" onclick="closeModal()">✕</button></div>'+
-    '<p style="color:var(--text2);font-size:.82rem;margin-bottom:8px;">امسح الكود للانضمام</p>'+
+    '<p style="color:var(--text2);font-size:.82rem;margin-bottom:8px;">امسح الكود للتسجيل في الفصل</p>'+
     '<div id="qr-box"></div>'+
     '<p style="text-align:center;margin-top:8px;font-size:.75rem;color:var(--text3);">ID: '+cid+'</p>'
   );
   setTimeout(function(){
     var el=document.getElementById('qr-box');
-    if(el){ el.innerHTML=''; new QRCode(el,{text:'trz://join?cid='+cid+'&tid='+CU.id,width:200,height:200}); }
+    if(el){ el.innerHTML=''; new QRCode(el,{text:joinUrl,width:200,height:200}); }
   },100);
 }
 
@@ -1097,42 +1103,131 @@ function showStudentQR(sid){
   },100);
 }
 
+var _qrScanStream = null;
+
 function openScanQR(){
   toggleSidebar();
   openModal(
-    '<div class="modal-title">📱 مسح QR طالب <button class="close-btn" onclick="closeModal()">✕</button></div>'+
-    '<input class="inp" id="qr-inp" placeholder="أدخل ID الطالب" />'+
-    '<button class="btn btn-primary" onclick="processScan()">بحث</button>'+
-    '<div id="qr-res" style="margin-top:12px;"></div>'
+    '<div class="modal-title">📱 مسح QR طالب <button class="close-btn" onclick="closeScanQR()">✕</button></div>'+
+    '<div id="qr-cam-wrap" style="position:relative;width:100%;border-radius:12px;overflow:hidden;background:#000;margin-bottom:10px;display:flex;justify-content:center;">'+
+    '<video id="qr-video" style="width:100%;max-width:320px;border-radius:10px;" autoplay playsinline muted></video>'+
+    '<canvas id="qr-canvas" style="display:none;"></canvas>'+
+    '<div id="qr-aim" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:160px;height:160px;border:2px solid #00f5ff;border-radius:10px;pointer-events:none;box-shadow:0 0 0 9999px rgba(0,0,0,.35);"></div>'+
+    '</div>'+
+    '<div id="qr-cam-status" style="text-align:center;font-size:.8rem;color:var(--text2);margin-bottom:8px;">جاري تشغيل الكاميرا...</div>'+
+    '<div style="display:flex;gap:7px;margin-bottom:10px;">'+
+    '<input class="inp" id="qr-inp" placeholder="أو أدخل ID الطالب يدوياً" style="margin-bottom:0;" />'+
+    '<button class="btn btn-primary btn-sm" style="white-space:nowrap;" onclick="processScanManual()">بحث</button></div>'+
+    '<div id="qr-res"></div>'
   );
+  startQRCamera();
 }
 
-function processScan(){
+function closeScanQR(){
+  stopQRCamera();
+  closeModal();
+}
+
+function stopQRCamera(){
+  if(_qrScanStream){
+    _qrScanStream.getTracks().forEach(function(t){t.stop();});
+    _qrScanStream = null;
+  }
+  if(window._qrScanTick){ clearInterval(window._qrScanTick); window._qrScanTick=null; }
+}
+
+function startQRCamera(){
+  var video = document.getElementById('qr-video');
+  var canvas = document.getElementById('qr-canvas');
+  var status = document.getElementById('qr-cam-status');
+  if(!video||!canvas) return;
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})
+  .then(function(stream){
+    _qrScanStream = stream;
+    video.srcObject = stream;
+    video.play();
+    if(status) status.textContent = 'وجّه الكاميرا نحو QR الطالب';
+    var ctx = canvas.getContext('2d');
+    window._qrScanTick = setInterval(function(){
+      if(!video||video.readyState!==4) return;
+      canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      var img = ctx.getImageData(0,0,canvas.width,canvas.height);
+      try{
+        var code = window.jsQR ? window.jsQR(img.data,img.width,img.height) : null;
+        if(code && code.data){
+          clearInterval(window._qrScanTick); window._qrScanTick=null;
+          if(status) status.textContent='✅ تم قراءة الكود';
+          processScanFromQR(code.data);
+        }
+      }catch(e){}
+    },300);
+  })
+  .catch(function(err){
+    if(status) status.textContent='⚠️ تعذّر فتح الكاميرا — استخدم الإدخال اليدوي';
+  });
+}
+
+function processScanFromQR(raw){
+  // raw = "trz://student?sid=S-XXXXXXXX"
+  var sid = '';
+  var m = raw.match(/[?&]sid=([^&]+)/);
+  if(m) sid = m[1];
+  else sid = raw.trim();
+  processAttendance(sid);
+}
+
+function processScanManual(){
   var sid=(document.getElementById('qr-inp')||{}).value||''; sid=sid.trim();
-  FS.get('students',sid).then(function(s){
-    if(!s){ toast('طالب غير موجود','#ff3d6b',true); return; }
-    var today=new Date().toISOString().split('T')[0];
-    var att=s.attendance||{}; att[today]='P';
-    FS.update('students',sid,{attendance:att}).then(function(){
-      if(s.classId){
-        FS.get('classes',s.classId).then(function(cls){
-          if(cls){
-            var dates=cls.dates||[];
-            if(!dates.includes(today)) dates.push(today);
-            FS.update('classes',s.classId,{dates:dates});
-          }
-        });
+  if(!sid){ toast('أدخل ID الطالب','#ff3d6b',true); return; }
+  processAttendance(sid);
+}
+
+// Legacy alias kept for togglePaidScan callback
+function processScan(){
+  processScanManual();
+}
+
+function processAttendance(sid){
+  var el=document.getElementById('qr-res');
+  if(el) el.innerHTML='<div class="loader">جاري التحقق...</div>';
+  waitFS(function(){
+    FS.get('students',sid).then(function(s){
+      if(!s){
+        if(el) el.innerHTML='<div style="text-align:center;padding:14px;color:#ff3d6b;font-size:.95rem;font-weight:700;">⚠️ هذا الطالب غير موجود هنا</div>';
+        return;
       }
-      var el=document.getElementById('qr-res');
-      if(el) el.innerHTML=
-        '<div class="student-card">'+
-        '<div class="stu-avatar">'+s.name[0]+'</div>'+
-        '<div class="stu-info"><div class="stu-name">'+s.name+'</div>'+
-        '<div class="stu-id">'+sid+'</div>'+
-        '<div class="stu-badges">'+
-        '<span class="'+(s.paid?'bp':'bu')+'">'+(s.paid?'✓ دفع':'✕ لم يدفع')+'</span>'+
-        '<span class="ba">✓ حضر اليوم</span></div></div></div>'+
-        '<button class="btn btn-sm '+(s.paid?'btn-danger':'btn-success')+'" style="margin-top:8px;" onclick="togglePaidScan(\''+sid+'\')">'+(s.paid?'إلغاء الدفع':'تسجيل الدفع')+'</button>';
+      // تحقق أن الطالب في أحد فصول هذا المعلم
+      FS.query('classes','teacherId','==',CU.id).then(function(myClasses){
+        var myClassIds = myClasses.map(function(c){return c.id;});
+        if(!s.teacherId || s.teacherId!==CU.id || myClassIds.indexOf(s.classId)===-1){
+          if(el) el.innerHTML='<div style="text-align:center;padding:14px;color:#ff3d6b;font-size:.95rem;font-weight:700;">⚠️ هذا الطالب غير موجود هنا</div>';
+          return;
+        }
+        // الطالب موجود — سجّل الحضور
+        var today=new Date().toISOString().split('T')[0];
+        var att=s.attendance||{}; att[today]='P';
+        FS.update('students',sid,{attendance:att}).then(function(){
+          // تأكد أن اليوم موجود في قائمة الغياب
+          FS.get('classes',s.classId).then(function(cls){
+            if(cls){
+              var dates=cls.dates||[];
+              if(!dates.includes(today)) dates.push(today);
+              FS.update('classes',s.classId,{dates:dates});
+            }
+          });
+          if(el) el.innerHTML=
+            '<div class="student-card" style="border-color:#00ff88;">'+
+            '<div class="stu-avatar" style="background:linear-gradient(135deg,#00ff88,#00c266);color:#000;">'+s.name[0]+'</div>'+
+            '<div class="stu-info"><div class="stu-name">'+s.name+'</div>'+
+            '<div class="stu-id">'+sid+' | '+s.phone+'</div>'+
+            '<div class="stu-badges">'+
+            '<span class="'+(s.paid?'bp':'bu')+'">'+(s.paid?'✓ دفع':'✕ لم يدفع')+'</span>'+
+            '<span class="ba">✓ حضر اليوم '+today+'</span></div></div></div>'+
+            '<button class="btn btn-sm '+(s.paid?'btn-danger':'btn-success')+'" style="margin-top:8px;" onclick="togglePaidScan(\''+sid+'\')">'+(s.paid?'إلغاء الدفع':'تسجيل الدفع')+'</button>';
+          toast('✅ تم تسجيل حضور '+s.name);
+        });
+      });
     });
   });
 }
@@ -1141,7 +1236,7 @@ function togglePaidScan(sid){
   FS.get('students',sid).then(function(s){
     FS.update('students',sid,{paid:!s.paid}).then(function(){
       toast(s.paid?'تم إلغاء الدفع':'تم تسجيل الدفع ✓');
-      processScan();
+      processAttendance(sid);
     });
   });
 }
@@ -1383,8 +1478,25 @@ function doLogout(){
   document.getElementById('ssb-ov').classList.remove('open');
 }
 
+// ── QR JOIN HANDLER (from class QR scan) ──────────────────
+function handleQRJoin(){
+  var params = new URLSearchParams(window.location.search);
+  if(params.get('join')==='1'){
+    var tid = params.get('tid')||'';
+    var cid = params.get('cid')||'';
+    // انتظر حتى يتحمل FB ثم افتح نافذة التسجيل
+    waitFS(function(){
+      selectRole('student');
+      showStudentReg(tid, cid, true);
+    });
+    // نظف الـ URL بدون إعادة تحميل
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+}
+
 // INIT
 renderLoginFields();
+handleQRJoin();
 </script>
 </body>
 </html>
