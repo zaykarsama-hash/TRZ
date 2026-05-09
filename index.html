@@ -251,6 +251,7 @@ textarea.inp{resize:vertical;min-height:72px;}
   </div>
   <div style="flex:1;">
     <div class="sidebar-item" onclick="toggleDark()"><span>🌙</span><span id="dark-lbl-s">الوضع الفاتح</span></div>
+    <div class="sidebar-item" onclick="toggleSidebarStudent();openMyQR()"><span>📱</span>عرض QR الخاص بي</div>
     <div class="sidebar-item" onclick="openRating()"><span>⭐</span>تقييم المدرس</div>
     <div class="sidebar-item" style="color:#ff3d6b;" onclick="doLogout()"><span>🚪</span>تسجيل الخروج</div>
   </div>
@@ -1309,7 +1310,9 @@ function loadStudent(){
     dashboard.innerHTML=
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">'+
       '<div style="width:50px;height:50px;border-radius:13px;background:linear-gradient(135deg,#00f5ff,#00ff88);display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:900;color:#000;">'+s.name[0]+'</div>'+
-      '<div><div style="font-size:1.05rem;font-weight:700;">'+s.name+'</div><div style="color:var(--text2);font-size:.76rem;">'+CU.id+'</div></div></div>'+
+      '<div style="flex:1;"><div style="font-size:1.05rem;font-weight:700;">'+s.name+'</div><div style="color:var(--text2);font-size:.76rem;">'+CU.id+'</div></div>'+
+      '<button class="btn btn-sm btn-primary" onclick="openMyQR()" style="white-space:nowrap;">📱 QR</button>'+
+      '</div>'+
       '<div class="stat-grid">'+
       '<div class="stat-card c2"><div class="stat-val" style="color:#00ff88">'+pct+'%</div><div class="stat-lbl">نسبة الحضور</div></div>'+
       '<div class="stat-card c4"><div class="stat-val" style="color:#ff3d6b">'+abs+'</div><div class="stat-lbl">أيام الغياب</div></div>'+
@@ -1388,6 +1391,34 @@ function buildMatesView(mates,tid,exams){
       '<div class="stu-info"><div class="stu-name">'+m.name+'</div>'+
       '<div class="stu-id">حضور: '+p+'% | درجات: '+avg+'%</div></div></div>';
   }).join('');
+}
+
+function openMyQR(){
+  openModal(
+    '<div class="modal-title">📱 QR الخاص بي <button class="close-btn" onclick="closeModal()">✕</button></div>'+
+    '<p style="color:var(--text2);font-size:.82rem;margin-bottom:10px;text-align:center;">أعطِ هذا الكود للمعلم لتسجيل حضورك</p>'+
+    '<div id="qr-box" style="display:flex;justify-content:center;padding:14px;background:#fff;border-radius:12px;"></div>'+
+    '<p style="text-align:center;margin-top:8px;font-size:.75rem;color:var(--text3);">'+CU.id+'</p>'+
+    '<button class="btn btn-success" style="margin-top:12px;" onclick="downloadMyQR()">📥 تحميل صورة الـ QR</button>'
+  );
+  setTimeout(function(){
+    var el=document.getElementById('qr-box');
+    if(el){ el.innerHTML=''; new QRCode(el,{text:'trz://student?sid='+CU.id,width:220,height:220}); }
+  },100);
+}
+
+function downloadMyQR(){
+  var el=document.getElementById('qr-box');
+  if(!el) return;
+  var img=el.querySelector('img');
+  var canvas=el.querySelector('canvas');
+  var src='';
+  if(canvas){ src=canvas.toDataURL('image/png'); }
+  else if(img){ src=img.src; }
+  if(!src){ toast('تعذّر التحميل','#ff3d6b',true); return; }
+  var a=document.createElement('a');
+  a.href=src; a.download='QR-'+CU.id+'.png'; a.click();
+  toast('تم تحميل صورة الـ QR ✓');
 }
 
 function sTab(tab,el){
@@ -1499,4 +1530,4 @@ renderLoginFields();
 handleQRJoin();
 </script>
 </body>
-</html>
+  </html>
