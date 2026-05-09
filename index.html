@@ -236,6 +236,13 @@ textarea.inp{resize:vertical;min-height:72px;}
   <div style="flex:1;">
     <div class="sidebar-item" onclick="toggleDark()"><span>🌙</span><span id="dark-lbl">الوضع الفاتح</span></div>
     <div class="sidebar-item" onclick="openScanQR()"><span>📱</span>مسح QR طالب</div>
+    <div style="margin:6px 0;padding:11px 9px;background:var(--bg3);border-radius:10px;border:1px solid var(--border);">
+      <div style="font-size:.72rem;color:var(--text2);margin-bottom:5px;">⭐ تقييم الطلاب لك</div>
+      <div id="sb-rating-stars" style="font-size:1.2rem;letter-spacing:2px;margin-bottom:3px;">☆☆☆☆☆</div>
+      <div id="sb-rating-val" style="font-size:.8rem;color:var(--accent);font-weight:700;">لا يوجد تقييم بعد</div>
+      <div id="sb-rating-count" style="font-size:.68rem;color:var(--text3);margin-top:1px;"></div>
+      <button class="btn btn-sm" onclick="openTeacherRatingComments()" style="margin-top:7px;background:rgba(0,245,255,.1);border:1px solid var(--accent);color:var(--accent);width:100%;font-size:.74rem;">💬 عرض التعليقات</button>
+    </div>
     <div class="sidebar-item" onclick="exportAll()"><span>📥</span>تحميل كل البيانات</div>
     <div class="sidebar-item" style="color:#ff3d6b;" onclick="doLogout()"><span>🚪</span>تسجيل الخروج</div>
   </div>
@@ -330,8 +337,67 @@ function closeModal(){ if(typeof stopQRCamera==='function') stopQRCamera(); docu
 function modalOvClick(e){ if(e.target===document.getElementById('modal-ov')) closeModal(); }
 
 function toggleSidebar(){
+  var isOpening = !document.getElementById('sb').classList.contains('open');
   document.getElementById('sb').classList.toggle('open');
   document.getElementById('sb-ov').classList.toggle('open');
+  if(isOpening && CU && CU.role==='teacher') loadTeacherRating();
+}
+
+function loadTeacherRating(){
+  FS.get('teachers',CU.id).then(function(t){
+    var ratings = t.rating||[];
+    var starsEl = document.getElementById('sb-rating-stars');
+    var valEl = document.getElementById('sb-rating-val');
+    var cntEl = document.getElementById('sb-rating-count');
+    if(!starsEl) return;
+    if(!ratings.length){
+      starsEl.textContent='☆☆☆☆☆';
+      valEl.textContent='لا يوجد تقييم بعد';
+      valEl.style.color='var(--text3)';
+      cntEl.textContent='';
+      return;
+    }
+    var avg = ratings.reduce(function(a,r){return a+r.rating;},0)/ratings.length;
+    var avgRounded = Math.round(avg*10)/10;
+    var full = Math.floor(avg);
+    var half = avg-full >= 0.5;
+    var stars = '';
+    for(var i=1;i<=5;i++){
+      if(i<=full) stars+='⭐';
+      else if(i===full+1&&half) stars+='🌟';
+      else stars+='☆';
+    }
+    starsEl.textContent = stars;
+    valEl.textContent = avgRounded+' / 5';
+    valEl.style.color = avg>=4?'#00ff88':avg>=3?'#ffb700':'#ff3d6b';
+    cntEl.textContent = '('+ratings.length+' تقييم)';
+  });
+}
+
+function openTeacherRatingComments(){
+  FS.get('teachers',CU.id).then(function(t){
+    var ratings = t.rating||[];
+    var withComments = ratings.filter(function(r){return r.comment&&r.comment.trim();});
+    var stars = function(n){var s='';for(var i=1;i<=5;i++)s+=i<=n?'⭐':'☆';return s;};
+    openModal(
+      '<div class="modal-title">💬 تعليقات الطلاب <button class="close-btn" onclick="closeModal()">✕</button></div>'+
+      (ratings.length?
+        '<div style="background:var(--bg3);border-radius:10px;padding:11px;text-align:center;margin-bottom:12px;">'+
+        '<div style="font-size:1.6rem;font-weight:900;color:var(--accent);">'+
+        (Math.round(ratings.reduce(function(a,r){return a+r.rating;},0)/ratings.length*10)/10)+
+        '<span style="font-size:.9rem;color:var(--text2);font-weight:400;"> / 5</span></div>'+
+        '<div style="font-size:.75rem;color:var(--text3);">'+ratings.length+' تقييم</div></div>':'')+
+      (withComments.length?
+        withComments.map(function(r){
+          return '<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:8px;">'+
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">'+
+            '<span style="font-size:.82rem;font-weight:700;color:var(--text2);">'+r.by+'</span>'+
+            '<span style="font-size:.85rem;">'+stars(r.rating)+'</span></div>'+
+            '<div style="font-size:.83rem;color:var(--text);line-height:1.5;">'+r.comment+'</div></div>';
+        }).join('')
+        :'<p class="empty-msg">لا توجد تعليقات مكتوبة بعد</p>')
+    );
+  });
 }
 function toggleSidebarStudent(){
   document.getElementById('ssb').classList.toggle('open');
@@ -1530,4 +1596,4 @@ renderLoginFields();
 handleQRJoin();
 </script>
 </body>
-  </html>
+    </html>
