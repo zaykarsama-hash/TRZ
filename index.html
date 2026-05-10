@@ -237,6 +237,11 @@ textarea.inp{resize:vertical;min-height:72px;}
   <div style="flex:1;">
     <div class="sidebar-item" onclick="toggleDark()"><span>🌙</span><span id="dark-lbl">الوضع الفاتح</span></div>
     <div class="sidebar-item" onclick="openScanQR()"><span>📱</span>مسح QR طالب</div>
+    <div style="margin:6px 0;padding:9px 11px;background:var(--bg3);border-radius:10px;border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div><div style="font-size:.67rem;color:var(--text3);margin-bottom:2px;">🪪 ID الخاص بك</div>
+      <div id="sb-tid-copy" style="font-size:.8rem;font-weight:700;color:#00f5ff;letter-spacing:.5px;"></div></div>
+      <button class="btn btn-sm btn-primary" style="white-space:nowrap;font-size:.72rem;" onclick="copyID(document.getElementById('sb-tid-copy').textContent,this)">📋 نسخ</button>
+    </div>
     <div style="margin:6px 0;padding:11px 9px;background:var(--bg3);border-radius:10px;border:1px solid var(--border);">
       <div style="font-size:.72rem;color:var(--text2);margin-bottom:5px;">⭐ تقييم الطلاب لك</div>
       <div id="sb-rating-stars" style="font-size:1.2rem;letter-spacing:2px;margin-bottom:3px;">☆☆☆☆☆</div>
@@ -260,6 +265,11 @@ textarea.inp{resize:vertical;min-height:72px;}
   <div style="flex:1;">
     <div class="sidebar-item" onclick="toggleDark()"><span>🌙</span><span id="dark-lbl-s">الوضع الفاتح</span></div>
     <div class="sidebar-item" onclick="toggleSidebarStudent();openMyQR()"><span>📱</span>عرض QR الخاص بي</div>
+    <div style="margin:6px 0;padding:9px 11px;background:var(--bg3);border-radius:10px;border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div><div style="font-size:.67rem;color:var(--text3);margin-bottom:2px;">🪪 ID الخاص بك</div>
+      <div id="ssb-id-copy" style="font-size:.8rem;font-weight:700;color:#00f5ff;letter-spacing:.5px;"></div></div>
+      <button class="btn btn-sm btn-primary" style="white-space:nowrap;font-size:.72rem;" onclick="copyID(document.getElementById('ssb-id-copy').textContent,this)">📋 نسخ</button>
+    </div>
     <div class="sidebar-item" onclick="openRating()"><span>⭐</span>تقييم المدرس</div>
     <div class="sidebar-item" style="color:#ff3d6b;" onclick="doLogout()"><span>🚪</span>تسجيل الخروج</div>
   </div>
@@ -492,13 +502,18 @@ function doRegisterTeacher(){
     if(pw!==pw2){ toast('كلمات المرور غير متطابقة','#ff3d6b',true); return; }
     var tid = uid('T-');
     FS.set('teachers',tid,{name:name,phone:phone,password:pw,classes:[],pending:[],rating:[]}).then(function(){
-      closeModal(); toast('تم الإنشاء! ID: '+tid);
+      closeModal();
       setTimeout(function(){
-        openModal('<div class="modal-title">🎉 تم إنشاء حسابك!</div>'+
-          '<div style="text-align:center;padding:14px;">'+
-          '<div style="font-size:2rem;font-weight:900;color:#00f5ff;">'+tid+'</div>'+
-          '<p style="color:var(--text2);margin-top:7px;font-size:.88rem;">احفظ هذا الـ ID للدخول</p></div>'+
-          '<button class="btn btn-primary" onclick="closeModal()">حسناً</button>');
+        openModal(
+          '<div class="modal-title">🎉 تم إنشاء حسابك!</div>'+
+          '<div style="text-align:center;padding:10px 14px;">'+
+          '<p style="color:var(--text2);font-size:.85rem;margin-bottom:10px;">هذا هو الـ ID الخاص بك — احفظه للدخول</p>'+
+          '<div style="background:var(--bg3);border:1px solid var(--accent);border-radius:12px;padding:14px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'+
+          '<span style="font-size:1.3rem;font-weight:900;color:#00f5ff;letter-spacing:1px;">'+tid+'</span>'+
+          '<button class="btn btn-sm btn-primary" onclick="copyID(\''+tid+'\',this)" style="white-space:nowrap;">📋 نسخ</button>'+
+          '</div></div>'+
+          '<button class="btn btn-success" style="margin-top:10px;" onclick="closeModal()">حسناً</button>'
+        );
       },300);
     });
   });
@@ -537,12 +552,48 @@ function doRegisterStudent(){
           var pending = teacher.pending||[];
           pending.push({sid:sid,name:name,phone:phone,classId:cid,via:method});
           FS.update('teachers',tid,{pending:pending}).then(function(){
-            closeModal(); toast('تم! انتظر موافقة المعلم. ID: '+sid);
+            closeModal();
+            setTimeout(function(){
+              openModal(
+                '<div class="modal-title">✅ تم التسجيل!</div>'+
+                '<div style="text-align:center;padding:6px 14px 10px;">'+
+                '<div style="background:rgba(255,183,0,.1);border:1px solid #ffb700;border-radius:10px;padding:10px 13px;margin-bottom:12px;font-size:.83rem;color:#ffb700;">'+
+                '⏳ حسابك قيد الانتظار — سيتم تفعيله بعد موافقة المعلم</div>'+
+                '<p style="color:var(--text2);font-size:.83rem;margin-bottom:10px;">احفظ الـ ID الخاص بك للدخول لاحقاً</p>'+
+                '<div style="background:var(--bg3);border:1px solid var(--accent);border-radius:12px;padding:13px;display:flex;align-items:center;justify-content:space-between;gap:10px;">'+
+                '<span style="font-size:1.2rem;font-weight:900;color:#00f5ff;letter-spacing:1px;">'+sid+'</span>'+
+                '<button class="btn btn-sm btn-primary" onclick="copyID(\''+sid+'\',this)" style="white-space:nowrap;">📋 نسخ</button>'+
+                '</div></div>'+
+                '<button class="btn btn-success" style="margin-top:6px;" onclick="closeModal()">حسناً</button>'
+              );
+            },300);
           });
         });
       });
     });
   });
+}
+
+// ── COPY ID HELPER ─────────────────────────────────────────
+function copyID(id,btn){
+  if(!id||!id.trim()){ toast('لا يوجد ID','#ff3d6b',true); return; }
+  var txt=id.trim();
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(function(){
+      if(btn){ var orig=btn.textContent; btn.textContent='✓ تم النسخ!'; setTimeout(function(){btn.textContent=orig;},1800); }
+      else toast('تم نسخ الـ ID ✓');
+    }).catch(function(){ fallbackCopy(txt,btn); });
+  } else { fallbackCopy(txt,btn); }
+}
+function fallbackCopy(txt,btn){
+  var ta=document.createElement('textarea');
+  ta.value=txt; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try{ document.execCommand('copy');
+    if(btn){ var orig=btn.textContent; btn.textContent='✓ تم النسخ!'; setTimeout(function(){btn.textContent=orig;},1800); }
+    else toast('تم نسخ الـ ID ✓');
+  }catch(e){ toast('تعذّر النسخ','#ff3d6b',true); }
+  document.body.removeChild(ta);
 }
 
 // ── TEACHER LOAD ───────────────────────────────────────────
@@ -552,6 +603,8 @@ function loadTeacher(){
   document.getElementById('sb-av').textContent = CU.name[0];
   document.getElementById('sb-name').textContent = CU.name;
   document.getElementById('sb-tid').textContent = 'ID: '+CU.id;
+  var sbTidCopy = document.getElementById('sb-tid-copy');
+  if(sbTidCopy) sbTidCopy.textContent = CU.id;
   refreshStats(); renderPending(); renderClasses(); fillAttSel(); renderExams();
 }
 
@@ -1562,6 +1615,8 @@ function loadStudent(){
   document.getElementById('ssb-av').textContent=CU.name[0];
   document.getElementById('ssb-name').textContent=CU.name;
   document.getElementById('ssb-id').textContent='ID: '+CU.id;
+  var ssbIdCopy=document.getElementById('ssb-id-copy');
+  if(ssbIdCopy) ssbIdCopy.textContent=CU.id;
   var s=CU;
   var av=Object.values(s.attendance||{});
   var pct=av.length?Math.round(av.filter(function(v){return v==='P';}).length/av.length*100):0;
