@@ -249,6 +249,14 @@ textarea.inp{resize:vertical;min-height:72px;}
       <div id="sb-rating-count" style="font-size:.68rem;color:var(--text3);margin-top:1px;"></div>
       <button class="btn btn-sm" onclick="openTeacherRatingComments()" style="margin-top:7px;background:rgba(0,245,255,.1);border:1px solid var(--accent);color:var(--accent);width:100%;font-size:.74rem;">💬 عرض التعليقات</button>
     </div>
+    <div style="margin:6px 0;padding:11px 9px;background:var(--bg3);border-radius:10px;border:1px solid var(--border);">
+      <div style="font-size:.72rem;color:var(--text2);margin-bottom:5px;">📚 المواد التعليمية (مرئية للطلاب)</div>
+      <textarea class="inp" id="sb-resources" placeholder="أضف روابط أو نصوص تعليمية هنا..." maxlength="500" style="min-height:80px;font-size:.78rem;margin-bottom:5px;resize:vertical;" oninput="updateResourcesCounter()"></textarea>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span id="sb-res-count" style="font-size:.66rem;color:var(--text3);">0 / 500</span>
+        <button class="btn btn-sm btn-primary" style="font-size:.72rem;" onclick="saveTeacherResources()">💾 حفظ</button>
+      </div>
+    </div>
     <div class="sidebar-item" onclick="exportAll()"><span>📥</span>تحميل كل البيانات</div>
     <div class="sidebar-item" style="color:#ff3d6b;" onclick="doLogout()"><span>🚪</span>تسجيل الخروج</div>
   </div>
@@ -351,7 +359,30 @@ function toggleSidebar(){
   var isOpening = !document.getElementById('sb').classList.contains('open');
   document.getElementById('sb').classList.toggle('open');
   document.getElementById('sb-ov').classList.toggle('open');
-  if(isOpening && CU && CU.role==='teacher') loadTeacherRating();
+  if(isOpening && CU && CU.role==='teacher'){ loadTeacherRating(); loadTeacherResources(); }
+}
+
+function updateResourcesCounter(){
+  var el=document.getElementById('sb-resources');
+  var cnt=document.getElementById('sb-res-count');
+  if(el&&cnt) cnt.textContent=(el.value||'').length+' / 500';
+}
+
+function loadTeacherResources(){
+  FS.get('teachers',CU.id).then(function(t){
+    var res=t.resources||'';
+    var el=document.getElementById('sb-resources');
+    if(el){ el.value=res; updateResourcesCounter(); }
+  });
+}
+
+function saveTeacherResources(){
+  var el=document.getElementById('sb-resources');
+  if(!el) return;
+  var val=el.value.trim();
+  FS.update('teachers',CU.id,{resources:val}).then(function(){
+    toast('تم الحفظ ✓');
+  });
 }
 
 function loadTeacherRating(){
@@ -1679,6 +1710,17 @@ function buildStuInfoView(s,teacher,cls){
   var comms=s.comments||[];
   var clsDates=(cls&&cls.dates)||[];
   var m=curMonth(); var pst=payStatus(s,m);
+  var teacherRes = teacher&&teacher.resources ? teacher.resources : '';
+  var resHtml='';
+  if(teacherRes){
+    // اكتشاف الروابط وتحويلها إلى نص قابل للنقر
+    var escaped = teacherRes.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    var linked = escaped.replace(/(https?:\/\/[^\s]+)/g,'<a href="$1" target="_blank" style="color:#00f5ff;word-break:break-all;">$1</a>');
+    resHtml='<div style="margin-top:12px;"><div class="section-title">📚 المواد التعليمية</div>'+
+      '<div style="background:var(--card);border:1px solid var(--accent);border-radius:8px;padding:10px;font-size:.82rem;line-height:1.7;white-space:pre-wrap;word-break:break-word;">'+linked+'</div></div>';
+  } else {
+    resHtml='<div style="margin-top:12px;"><div class="section-title">📚 المواد التعليمية</div><p class="empty-msg">لا توجد مواد تعليمية بعد</p></div>';
+  }
   return '<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px;">'+
     '<div class="info-row"><span class="info-key">المعلم</span><span class="info-val">'+(teacher?teacher.name:'-')+'</span></div>'+
     '<div class="info-row"><span class="info-key">الفصل</span><span class="info-val">'+(cls?cls.name:'-')+'</span></div>'+
@@ -1689,6 +1731,7 @@ function buildStuInfoView(s,teacher,cls){
     '<span style="font-size:.8rem;font-weight:700;">💰 دفع '+monthLabel(m)+'</span>'+payChip(pst)+'</div>'+
     '<div style="font-size:.7rem;color:var(--text3);margin-bottom:4px;">سجل الدفع الشهري</div>'+buildPayHistory(s,clsDates,null)+
     '</div>'+
+    resHtml+
     '<div style="margin-top:12px;"><div class="section-title">تعليقات المعلم</div>'+
     (comms.length?comms.map(function(c){return '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;font-size:.8rem;">'+c+'</div>';}).join(''):'<p class="empty-msg">لا توجد تعليقات</p>')+
     '</div>';
@@ -1732,8 +1775,25 @@ function downloadQRBox(filename){
   var canvas=el.querySelector('canvas');
   var img=el.querySelector('img');
   var src='';
-  if(canvas){ src=canvas.toDataURL('image/png'); }
-  else if(img){ src=img.src; }
+  if(canvas){
+    // رسم على خلفية بيضاء
+    var c2=document.createElement('canvas');
+    c2.width=canvas.width; c2.height=canvas.height;
+    var ctx=c2.getContext('2d');
+    ctx.fillStyle='#ffffff';
+    ctx.fillRect(0,0,c2.width,c2.height);
+    ctx.drawImage(canvas,0,0);
+    src=c2.toDataURL('image/png');
+  } else if(img){
+    // للصور: ارسم على canvas بخلفية بيضاء
+    var c3=document.createElement('canvas');
+    c3.width=img.naturalWidth||220; c3.height=img.naturalHeight||220;
+    var ctx3=c3.getContext('2d');
+    ctx3.fillStyle='#ffffff';
+    ctx3.fillRect(0,0,c3.width,c3.height);
+    ctx3.drawImage(img,0,0);
+    src=c3.toDataURL('image/png');
+  }
   if(!src){ toast('تعذّر التحميل','#ff3d6b',true); return; }
   var a=document.createElement('a');
   a.href=src; a.download=(filename||'QR')+'.png'; a.click();
@@ -1791,6 +1851,14 @@ function searchParent(){
         exams.map(function(e){return '<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.78rem;"><span>'+e.name+'</span><span>'+((s.scores||{})[e.id]||'-')+' / '+e.maxScore+'</span></div>';}).join('')+'</div>':'')+
         ((s.comments||[]).length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">تعليقات المعلم</div>'+
         s.comments.map(function(c){return '<div style="background:var(--bg3);border-radius:6px;padding:7px;margin-bottom:5px;font-size:.78rem;">'+c+'</div>';}).join('')+'</div>':'')+
+        (function(){
+          var res=teacher&&teacher.resources?teacher.resources:'';
+          if(!res) return '<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">📚 المواد التعليمية</div><p class="empty-msg" style="font-size:.76rem;">لا توجد مواد تعليمية بعد</p></div>';
+          var escaped=res.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          var linked=escaped.replace(/(https?:\/\/[^\s]+)/g,'<a href="$1" target="_blank" style="color:#00f5ff;word-break:break-all;">$1</a>');
+          return '<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">📚 المواد التعليمية</div>'+
+            '<div style="background:var(--bg3);border:1px solid var(--accent);border-radius:7px;padding:9px;font-size:.78rem;line-height:1.7;white-space:pre-wrap;word-break:break-word;">'+linked+'</div></div>';
+        })()+
         '</div>';
     });
   });
@@ -1861,8 +1929,4 @@ function handleQRJoin(){
 }
 
 // INIT
-renderLoginFields();
-handleQRJoin();
-</script>
-</body>
-  </html>
+rende
