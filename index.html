@@ -6,6 +6,7 @@
 <title>TRZ Master</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{
   --bg:#060d18;--bg2:#0d1829;--bg3:#111f35;--card:#0f1e30;
@@ -532,7 +533,7 @@ function doRegisterStudent(){
       FS.get('classes',cid).then(function(cls){
         if(!cls){ toast('ID الفصل غير صحيح','#ff3d6b',true); return; }
         var sid = uid('S-');
-        FS.set('students',sid,{name:name,phone:phone,password:pw,teacherId:tid,classId:cid,status:'pending',paid:false,attendance:{},scores:{},comments:[]}).then(function(){
+        FS.set('students',sid,{name:name,phone:phone,password:pw,teacherId:tid,classId:cid,status:'pending',payments:{},attendance:{},scores:{},comments:[]}).then(function(){
           var pending = teacher.pending||[];
           pending.push({sid:sid,name:name,phone:phone,classId:cid,via:method});
           FS.update('teachers',tid,{pending:pending}).then(function(){
@@ -557,11 +558,12 @@ function loadTeacher(){
 function refreshStats(){
   FS.query('students','teacherId','==',CU.id).then(function(students){
     var active = students.filter(function(s){ return s.status==='active'; });
-    var paid = active.filter(function(s){ return s.paid; }).length;
+    var m=curMonth();
+    var paid = active.filter(function(s){ return payStatus(s,m)==='paid'; }).length;
     var avgAtt = calcAvgAtt(active);
     FS.query('classes','teacherId','==',CU.id).then(function(classes){
       document.getElementById('t-stats').innerHTML =
-        '<div class="stat-card c1"><span class="stat-icon">💰</span><div class="stat-val" style="color:#00f5ff">'+paid+'/'+active.length+'</div><div class="stat-lbl">دفعوا</div></div>'+
+        '<div class="stat-card c1"><span class="stat-icon">💰</span><div class="stat-val" style="color:#00f5ff">'+paid+'/'+active.length+'</div><div class="stat-lbl">دفعوا هذا الشهر</div></div>'+
         '<div class="stat-card c2"><span class="stat-icon">📅</span><div class="stat-val" style="color:#00ff88">'+avgAtt+'%</div><div class="stat-lbl">متوسط الحضور</div></div>'+
         '<div class="stat-card c3"><span class="stat-icon">🏫</span><div class="stat-val" style="color:#4d79ff">'+classes.length+'</div><div class="stat-lbl">الفصول</div></div>'+
         '<div class="stat-card c4"><span class="stat-icon">👥</span><div class="stat-val" style="color:#00f5ff">'+active.length+'</div><div class="stat-lbl">الطلاب</div></div>';
@@ -709,18 +711,22 @@ function renderClassModal(c,cid,students){
 
 function buildStudentCards(students,cid){
   if(!students.length) return '<p class="empty-msg">لا يوجد طلاب</p>';
+  var m=curMonth();
   return students.map(function(s){
     var av = Object.values(s.attendance||{});
     var abs = av.filter(function(v){return v==='A';}).length;
     var lastD = Object.keys(s.attendance||{}).sort().pop();
     var lastTxt = lastD?(s.attendance[lastD]==='P'?'حضر':'غاب'):'-';
+    var pst = payStatus(s,m);
+    var pclass = pst==='paid'?'bp':pst==='absent'?'ba':'bu';
+    var plabel = pst==='paid'?'✓ دفع':pst==='absent'?'لم يحضر':'✕ لم يدفع';
     return '<div class="student-card" style="cursor:pointer;" onclick="openStudentDetail(\''+s.id+'\',\''+cid+'\')">'+
       '<div class="stu-avatar">'+s.name[0]+'</div>'+
       '<div class="stu-info">'+
       '<div class="stu-name">'+s.name+'</div>'+
       '<div class="stu-id">'+s.id+' | 📱 '+s.phone+'</div>'+
       '<div class="stu-badges">'+
-      '<span class="'+(s.paid?'bp':'bu')+'">'+(s.paid?'✓ دفع':'✕ لم يدفع')+'</span>'+
+      '<span class="'+pclass+'">'+plabel+'</span>'+
       '<span class="ba">غياب: '+abs+'</span>'+
       '<span style="font-size:.65rem;color:var(--text3);">آخر حصة: '+lastTxt+'</span>'+
       '</div></div></div>';
@@ -750,7 +756,7 @@ function addStudentDirect(cid){
     var pw=(document.getElementById('aspw')||{}).value||'';
     if(!name||!phone||!pw){ toast('أكمل الحقول','#ff3d6b',true); return; }
     var sid = uid('S-');
-    FS.set('students',sid,{name:name,phone:phone,password:pw,teacherId:CU.id,classId:cid,status:'active',paid:false,attendance:{},scores:{},comments:[]}).then(function(){
+    FS.set('students',sid,{name:name,phone:phone,password:pw,teacherId:CU.id,classId:cid,status:'active',payments:{},attendance:{},scores:{},comments:[]}).then(function(){
       FS.get('classes',cid).then(function(cls){
         var stus = cls.students||[]; stus.push(sid);
         FS.update('classes',cid,{students:stus}).then(function(){
@@ -764,15 +770,18 @@ function addStudentDirect(cid){
 // ── STUDENT DETAIL ─────────────────────────────────────────
 function openStudentDetail(sid,cid){
   FS.get('students',sid).then(function(s){
-    openModal(
-      '<div class="modal-title">👤 '+s.name+' <button class="close-btn" onclick="closeModal()">✕</button></div>'+
-      '<div class="tabs">'+
-      '<div class="tab active" onclick="sdTab(\'info\',\''+sid+'\',\''+cid+'\',this)">البيانات</div>'+
-      '<div class="tab" onclick="sdTab(\'scores\',\''+sid+'\',\''+cid+'\',this)">الدرجات</div>'+
-      '<div class="tab" onclick="sdTab(\'comments\',\''+sid+'\',\''+cid+'\',this)">تعليقات</div>'+
-      '</div>'+
-      '<div id="sd-'+sid+'">'+buildStuInfo(s,cid)+'</div>'
-    );
+    FS.get('classes',cid).then(function(cls){
+      var clsDates=(cls&&cls.dates)||[];
+      openModal(
+        '<div class="modal-title">👤 '+s.name+' <button class="close-btn" onclick="closeModal()">✕</button></div>'+
+        '<div class="tabs">'+
+        '<div class="tab active" onclick="sdTab(\'info\',\''+sid+'\',\''+cid+'\',this)">البيانات</div>'+
+        '<div class="tab" onclick="sdTab(\'scores\',\''+sid+'\',\''+cid+'\',this)">الدرجات</div>'+
+        '<div class="tab" onclick="sdTab(\'comments\',\''+sid+'\',\''+cid+'\',this)">تعليقات</div>'+
+        '</div>'+
+        '<div id="sd-'+sid+'">'+buildStuInfo(s,cid,clsDates)+'</div>'
+      );
+    });
   });
 }
 
@@ -780,27 +789,141 @@ function sdTab(tab,sid,cid,el){
   el.parentElement.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
   el.classList.add('active');
   FS.get('students',sid).then(function(s){
-    var c = document.getElementById('sd-'+sid);
-    if(!c) return;
-    if(tab==='info') c.innerHTML = buildStuInfo(s,cid);
-    else if(tab==='scores'){
-      FS.query('exams','teacherId','==',CU.id).then(function(exams){
-        c.innerHTML = buildStuScores(s,exams);
-      });
-    } else c.innerHTML = buildStuComments(s);
+    FS.get('classes',cid).then(function(cls){
+      var clsDates=(cls&&cls.dates)||[];
+      var c = document.getElementById('sd-'+sid);
+      if(!c) return;
+      if(tab==='info') c.innerHTML = buildStuInfo(s,cid,clsDates);
+      else if(tab==='scores'){
+        FS.query('exams','teacherId','==',CU.id).then(function(exams){
+          c.innerHTML = buildStuScores(s,exams);
+        });
+      } else c.innerHTML = buildStuComments(s);
+    });
   });
 }
 
-function buildStuInfo(s,cid){
-  var av=Object.values(s.attendance||{});
-  var pres=av.filter(function(v){return v==='P';}).length;
-  var abs=av.filter(function(v){return v==='A';}).length;
+// ── MONTHLY PAYMENT HELPERS ────────────────────────────────
+function curMonth(){ return new Date().toISOString().slice(0,7); }
+function monthLabel(m){ var d=new Date(m+'-01'); return d.toLocaleString('ar-EG',{month:'long',year:'numeric'}); }
+function payStatus(s,month){ return (s.payments||{})[month||curMonth()]||'unpaid'; }
+function payChip(status){
+  if(status==='paid')   return '<span class="chip cg">✓ دفع</span>';
+  if(status==='absent') return '<span class="chip" style="background:rgba(100,100,120,.25);color:var(--text2);">لم يحضر</span>';
+  if(status==='?')      return '<span class="chip" style="background:rgba(255,183,0,.15);color:#ffb700;">؟ لم يسجل</span>';
+  return '<span class="chip cr">✕ لم يدفع</span>';
+}
+function payBtnLabel(status){ return status==='paid'?'إلغاء الدفع':'تسجيل دفع'; }
+
+// استخرج الأشهر الفريدة من قائمة أيام الفصل
+function monthsFromDates(dates){
+  var set={};
+  (dates||[]).forEach(function(d){ var m=d.slice(0,7); set[m]=true; });
+  return Object.keys(set).sort().reverse();
+}
+
+function togglePaid(sid,cid){
+  FS.get('students',sid).then(function(s){
+    var m=curMonth();
+    var payments=s.payments||{};
+    var cur=payments[m]||'unpaid';
+    payments[m] = cur==='paid'?'unpaid':'paid';
+    FS.update('students',sid,{payments:payments}).then(function(){
+      toast(payments[m]==='paid'?'تم تسجيل الدفع ✓':'تم إلغاء الدفع');
+      openStudentDetail(sid,cid);
+    });
+  });
+}
+
+function setMonthlyPay(sid,cid,val,month){
+  var m = month || curMonth();
+  FS.get('students',sid).then(function(s){
+    var payments=s.payments||{};
+    var attendance=s.attendance||{};
+    if(val==='absent'){
+      Object.keys(attendance).forEach(function(day){
+        if(day.slice(0,7)===m) attendance[day]='?';
+      });
+      payments[m]='absent';
+      FS.update('students',sid,{payments:payments,attendance:attendance}).then(function(){
+        toast('تم التعيين: لم يحضر — تم مسح الحضور للشهر');
+        openStudentDetail(sid,cid);
+      });
+    } else if(val==='unpaid' && (payments[m]==='absent')){
+      // إلغاء "لم يحضر" يُعيد الأيام من '?' إلى ''
+      Object.keys(attendance).forEach(function(day){
+        if(day.slice(0,7)===m && attendance[day]==='?') attendance[day]='';
+      });
+      payments[m]='unpaid';
+      FS.update('students',sid,{payments:payments,attendance:attendance}).then(function(){
+        toast('تم إلغاء "لم يحضر" — يمكنك تسجيل الحضور الآن');
+        openStudentDetail(sid,cid);
+      });
+    } else {
+      payments[m]=val;
+      FS.update('students',sid,{payments:payments}).then(function(){
+        toast(val==='paid'?'✓ تم تسجيل الدفع':'تم إلغاء الدفع');
+        openStudentDetail(sid,cid);
+      });
+    }
+  });
+}
+
+function buildPayHistory(s,clsDates,cid){
+  var months = monthsFromDates(clsDates);
+  if(!months.length) return '<p style="color:var(--text3);font-size:.78rem;text-align:center;margin-top:4px;">لا توجد أشهر في سجل الفصل بعد</p>';
+  var payments=s.payments||{};
+  var sid=s.id;
+  var editable=!!cid;
+  return months.map(function(m){
+    var status=payments[m]||'unpaid';
+    var isCur=m===curMonth();
+    var editId='pay-edit-'+sid+'-'+m.replace('-','');
+    var rowClick=editable?' onclick="togglePayEdit(\''+editId+'\')" style="cursor:pointer;"':'';
+    return '<div style="border-bottom:1px solid var(--border);padding:6px 0;">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;"'+rowClick+'>'+
+      '<span style="font-size:.75rem;color:var(--text2);">'+monthLabel(m)+(isCur?' <span style="font-size:.6rem;color:#00f5ff;">●</span>':'')+'</span>'+
+      '<div style="display:flex;align-items:center;gap:5px;">'+payChip(status)+
+      (editable?'<span style="font-size:.65rem;color:var(--text3);">✏️</span>':'')+
+      '</div></div>'+
+      (editable?
+        '<div id="'+editId+'" style="display:none;margin-top:5px;">'+
+        '<div style="display:flex;gap:4px;flex-wrap:wrap;">'+
+        '<button class="btn btn-sm btn-success" style="font-size:.7rem;padding:3px 8px;" onclick="setMonthlyPay(\''+sid+'\',\''+cid+'\',\'paid\',\''+m+'\')">✓ دفع</button>'+
+        '<button class="btn btn-sm btn-danger" style="font-size:.7rem;padding:3px 8px;" onclick="setMonthlyPay(\''+sid+'\',\''+cid+'\',\'unpaid\',\''+m+'\')">✕ لم يدفع</button>'+
+        '<button class="btn btn-sm" style="font-size:.7rem;padding:3px 8px;background:rgba(100,100,120,.25);color:var(--text2);" onclick="setMonthlyPay(\''+sid+'\',\''+cid+'\',\'absent\',\''+m+'\')">🚫 لم يحضر</button>'+
+        '</div></div>'
+      :'')+
+      '</div>';
+  }).join('');
+}
+
+function togglePayEdit(id){
+  var el=document.getElementById(id);
+  if(!el) return;
+  var isOpen=el.style.display!=='none';
+  document.querySelectorAll('[id^="pay-edit-"]').forEach(function(e){ e.style.display='none'; });
+  el.style.display=isOpen?'none':'block';
+}
+
+function buildStuInfo(s,cid,clsDates){
+  var av=Object.values(s.attendance||{}).filter(function(v){return v==='P'||v==='A';});
+  var pres=Object.values(s.attendance||{}).filter(function(v){return v==='P';}).length;
+  var abs=Object.values(s.attendance||{}).filter(function(v){return v==='A';}).length;
   var pct=av.length?Math.round(pres/av.length*100):0;
+  var m=curMonth(); var status=payStatus(s,m);
   return '<div class="info-row"><span class="info-key">الاسم</span><span class="info-val">'+s.name+'</span></div>'+
     '<div class="info-row"><span class="info-key">ID</span><span class="info-val">'+s.id+'</span></div>'+
     '<div class="info-row"><span class="info-key">الهاتف</span><span class="info-val">'+s.phone+'</span></div>'+
-    '<div class="info-row"><span class="info-key">الدفع</span><span class="info-val">'+
-    '<button class="btn btn-sm '+(s.paid?'btn-success':'btn-danger')+'" onclick="togglePaid(\''+s.id+'\',\''+cid+'\')">'+(s.paid?'✓ دفع':'✕ لم يدفع')+'</button></span></div>'+
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px;margin:8px 0;">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">'+
+    '<span style="font-size:.78rem;font-weight:700;">💰 دفع '+monthLabel(m)+'</span>'+payChip(status)+'</div>'+
+    '<div style="display:flex;gap:5px;flex-wrap:wrap;">'+
+    '<button class="btn btn-sm btn-success" onclick="setMonthlyPay(\''+s.id+'\',\''+cid+'\',\'paid\')">✓ دفع</button>'+
+    '<button class="btn btn-sm btn-danger" onclick="setMonthlyPay(\''+s.id+'\',\''+cid+'\',\'unpaid\')">✕ لم يدفع</button>'+
+    '<button class="btn btn-sm" style="background:rgba(100,100,120,.25);color:var(--text2);" onclick="setMonthlyPay(\''+s.id+'\',\''+cid+'\',\'absent\')">🚫 لم يحضر</button></div>'+
+    '<div style="margin-top:9px;"><div style="font-size:.7rem;color:var(--text3);margin-bottom:3px;">سجل الدفع الشهري — اضغط على ✏️ لتعديل أي شهر</div>'+buildPayHistory(s,clsDates,cid)+'</div>'+
+    '</div>'+
     '<div class="info-row"><span class="info-key">نسبة الحضور</span><span class="info-val">'+pct+'%</span></div>'+
     '<div class="progress-bar"><div class="progress-fill" style="width:'+pct+'%"></div></div>'+
     '<div class="info-row"><span class="info-key">حضور / غياب</span><span class="info-val">'+pres+' / '+abs+'</span></div>'+
@@ -809,17 +932,15 @@ function buildStuInfo(s,cid){
     '<button class="btn btn-sm btn-danger" onclick="removeStudent(\''+s.id+'\',\''+cid+'\')">حذف</button></div>';
 }
 
-function togglePaid(sid,cid){
+function saveScore(sid,eid,val){
   FS.get('students',sid).then(function(s){
-    FS.update('students',sid,{paid:!s.paid}).then(function(){
-      toast(!s.paid?'تم تسجيل الدفع ✓':'تم إلغاء الدفع');
-      openStudentDetail(sid,cid);
-    });
+    var scores = s.scores||{}; scores[eid]=Number(val);
+    FS.update('students',sid,{scores:scores}).then(function(){ toast('تم حفظ الدرجة ✓'); });
   });
 }
 
 function buildStuScores(s,exams){
-  if(!exams.length) return '<p class="empty-msg">لا توجد امتحانات</p>';
+  if(!exams||!exams.length) return '<p class="empty-msg">لا توجد امتحانات</p>';
   return exams.map(function(ex){
     var sc=(s.scores||{})[ex.id]||'';
     return '<div class="exam-card">'+
@@ -828,13 +949,6 @@ function buildStuScores(s,exams){
       '<input class="score-inp" type="number" min="0" max="'+ex.maxScore+'" value="'+sc+'" placeholder="-" onchange="saveScore(\''+s.id+'\',\''+ex.id+'\',this.value)" />'+
       '<span style="color:var(--text2);font-size:.8rem;">/ '+ex.maxScore+'</span></div></div>';
   }).join('');
-}
-
-function saveScore(sid,eid,val){
-  FS.get('students',sid).then(function(s){
-    var scores = s.scores||{}; scores[eid]=Number(val);
-    FS.update('students',sid,{scores:scores}).then(function(){ toast('تم حفظ الدرجة ✓'); });
-  });
 }
 
 function buildStuComments(s){
@@ -891,6 +1005,7 @@ function renderAttTable(){
       '<input type="date" class="att-date-inp" id="att-dp" />'+
       '<button class="btn btn-success btn-sm" onclick="addAttDate(\''+cid+'\')">+ إضافة يوم</button>'+
       '<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+cid+'\')">✔ تحضير الكل</button>'+
+      '<button class="btn btn-sm" style="background:rgba(0,245,255,.15);color:var(--accent);border:1px solid var(--accent);" onclick="exportAttTable(\''+cid+'\')">📥 تحميل الجدول</button>'+
       '</div>'+
       '<div class="att-legend">'+
       '<span><span class="att-cell aP" style="width:20px;height:20px;font-size:.7rem;">✓</span> حضر</span>'+
@@ -950,6 +1065,7 @@ function toggleAtt(sid,date,cid){
   FS.get('students',sid).then(function(s){
     var att=s.attendance||{};
     var cur=att[date]||'';
+    if(cur==='?'){ toast('هذا الشهر مُعيَّن كـ "لم يحضر" — غيّر حالة الدفع أولاً','#ffb700',true); return; }
     att[date]=cur===''?'P':cur==='P'?'A':'';
     FS.update('students',sid,{attendance:att}).then(function(){ renderAttTable(); });
   });
@@ -968,7 +1084,7 @@ function markAllPresent(cid){
       stuIds.forEach(function(sid){
         FS.get('students',sid).then(function(s){
           var att=s.attendance||{};
-          if(!att[d]) att[d]='P';
+          if(!att[d] || att[d]==='') att[d]='P';
           FS.update('students',sid,{attendance:att}).then(function(){
             done2++;
             if(done2===stuIds.length){ renderAttTable(); toast('تم تحضير الكل ✓'); }
@@ -1291,9 +1407,12 @@ function processAttendance(sid){
             '<div class="stu-info"><div class="stu-name">'+s.name+'</div>'+
             '<div class="stu-id">'+sid+' | '+s.phone+'</div>'+
             '<div class="stu-badges">'+
-            '<span class="'+(s.paid?'bp':'bu')+'">'+(s.paid?'✓ دفع':'✕ لم يدفع')+'</span>'+
+            payChip(payStatus(s,curMonth()))+
             '<span class="ba">✓ حضر اليوم '+today+'</span></div></div></div>'+
-            '<button class="btn btn-sm '+(s.paid?'btn-danger':'btn-success')+'" style="margin-top:8px;" onclick="togglePaidScan(\''+sid+'\')">'+(s.paid?'إلغاء الدفع':'تسجيل الدفع')+'</button>';
+            '<div style="display:flex;gap:6px;margin-top:8px;">'+
+            '<button class="btn btn-sm btn-success" onclick="scanSetPay(\''+sid+'\',\'paid\')">✓ دفع</button>'+
+            '<button class="btn btn-sm btn-danger" onclick="scanSetPay(\''+sid+'\',\'unpaid\')">✕ لم يدفع</button>'+
+            '<button class="btn btn-sm" style="background:rgba(100,100,120,.25);color:var(--text2);" onclick="scanSetPay(\''+sid+'\',\'absent\')">🚫 لم يحضر</button></div>';
           toast('✅ تم تسجيل حضور '+s.name);
         });
       });
@@ -1301,29 +1420,77 @@ function processAttendance(sid){
   });
 }
 
+function scanSetPay(sid,val){
+  FS.get('students',sid).then(function(s){
+    var payments=s.payments||{};
+    var m=curMonth();
+    if(val==='absent'){
+      var attendance=s.attendance||{};
+      Object.keys(attendance).forEach(function(day){
+        if(day.slice(0,7)===m) attendance[day]='?';
+      });
+      payments[m]='absent';
+      FS.update('students',sid,{payments:payments,attendance:attendance}).then(function(){
+        toast('تم التعيين: لم يحضر — تم مسح الحضور للشهر');
+        processAttendance(sid);
+      });
+    } else {
+      payments[m]=val;
+      FS.update('students',sid,{payments:payments}).then(function(){
+        toast(val==='paid'?'✓ تم تسجيل الدفع':'تم إلغاء الدفع');
+        processAttendance(sid);
+      });
+    }
+  });
+}
+
 function togglePaidScan(sid){
   FS.get('students',sid).then(function(s){
-    FS.update('students',sid,{paid:!s.paid}).then(function(){
-      toast(s.paid?'تم إلغاء الدفع':'تم تسجيل الدفع ✓');
+    var payments=s.payments||{};
+    var m=curMonth();
+    payments[m]=payments[m]==='paid'?'unpaid':'paid';
+    FS.update('students',sid,{payments:payments}).then(function(){
+      toast(payments[m]==='paid'?'تم تسجيل الدفع ✓':'تم إلغاء الدفع');
       processAttendance(sid);
     });
   });
 }
 
-// ── EXPORT ─────────────────────────────────────────────────
+// ── EXPORT (Excel) ──────────────────────────────────────────
+function dlXLSX(wb, filename){
+  XLSX.writeFile(wb, filename);
+}
+
 function exportClass(cid){
   FS.get('classes',cid).then(function(c){
-    var stuIds=c.students||[]; var rows=[]; var done=0;
-    if(!stuIds.length){ dlCSV('ID,الاسم,الهاتف,الدفع,نسبة الحضور\n',c.name+'.csv'); return; }
-    stuIds.forEach(function(sid){
-      FS.get('students',sid).then(function(s){
-        if(s){
-          var av=Object.values(s.attendance||{});
-          var pct=av.length?Math.round(av.filter(function(v){return v==='P';}).length/av.length*100):0;
-          rows.push(s.id+','+s.name+','+s.phone+','+(s.paid?'دفع':'لم يدفع')+','+pct+'%');
-        }
-        done++;
-        if(done===stuIds.length) dlCSV('ID,الاسم,الهاتف,الدفع,نسبة الحضور\n'+rows.join('\n'),c.name+'.csv');
+    var stuIds=c.students||[];
+    if(!stuIds.length){ toast('لا يوجد طلاب','#ff3d6b',true); return; }
+    FS.query('exams','teacherId','==',CU.id).then(function(allExams){
+      var exams = allExams.filter(function(e){ return e.classId===cid; });
+      var done=0; var rows=[];
+      stuIds.forEach(function(sid){
+        FS.get('students',sid).then(function(s){
+          if(s){
+            var allAtt=Object.values(s.attendance||{});
+            var valid=allAtt.filter(function(v){return v==='P'||v==='A';});
+            var pres=allAtt.filter(function(v){return v==='P';}).length;
+            var abs=allAtt.filter(function(v){return v==='A';}).length;
+            var pct=valid.length?Math.round(pres/valid.length*100):0;
+            var row={'ID':s.id,'الاسم':s.name,'نسبة الحضور':pct+'%','أيام الغياب':abs};
+            exams.forEach(function(ex){
+              row[ex.name+(ex.maxScore?'/'+ex.maxScore:'')]=(s.scores||{})[ex.id]||'';
+            });
+            rows.push(row);
+          }
+          done++;
+          if(done===stuIds.length){
+            var ws=XLSX.utils.json_to_sheet(rows);
+            var wb=XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb,ws,c.name.slice(0,31));
+            dlXLSX(wb, c.name+'.xlsx');
+            toast('تم تحميل ملف Excel ✓');
+          }
+        });
       });
     });
   });
@@ -1334,23 +1501,59 @@ function exportAll(){
   FS.query('students','teacherId','==',CU.id).then(function(students){
     var active=students.filter(function(s){return s.status==='active';});
     if(!active.length){ toast('لا يوجد طلاب'); return; }
-    var rows=[]; var done=0;
+    var done=0; var rows=[];
     active.forEach(function(s){
       FS.get('classes',s.classId||'').then(function(cls){
-        var av=Object.values(s.attendance||{});
-        var pct=av.length?Math.round(av.filter(function(v){return v==='P';}).length/av.length*100):0;
-        rows.push(s.id+','+s.name+','+s.phone+','+(cls?cls.name:'-')+','+(s.paid?'دفع':'لم يدفع')+','+pct+'%');
+        var allAtt=Object.values(s.attendance||{});
+        var valid=allAtt.filter(function(v){return v==='P'||v==='A';});
+        var pres=allAtt.filter(function(v){return v==='P';}).length;
+        var abs=allAtt.filter(function(v){return v==='A';}).length;
+        var pct=valid.length?Math.round(pres/valid.length*100):0;
+        var scores=s.scores||{};
+        var scoreVals=Object.values(scores).map(Number).filter(function(v){return !isNaN(v)&&v>0;});
+        var avgScore=scoreVals.length?Math.round(scoreVals.reduce(function(a,b){return a+b;},0)/scoreVals.length*10)/10:'-';
+        rows.push({'ID':s.id,'الفصل':(cls?cls.name:'-'),'الاسم':s.name,'نسبة الحضور':pct+'%','أيام الغياب':abs,'متوسط الدرجات':avgScore});
         done++;
-        if(done===active.length){ dlCSV('ID,الاسم,الهاتف,الفصل,الدفع,نسبة الحضور\n'+rows.join('\n'),'all-students.csv'); toast('جاري التحميل...'); }
+        if(done===active.length){
+          var ws=XLSX.utils.json_to_sheet(rows);
+          var wb=XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb,ws,'كل الطلاب');
+          dlXLSX(wb,'all-students.xlsx');
+          toast('تم تحميل ملف Excel ✓');
+        }
       });
     });
   });
 }
 
-function dlCSV(content,filename){
-  var blob=new Blob(['\uFEFF'+content],{type:'text/csv;charset=utf-8;'});
-  var a=document.createElement('a');
-  a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+function exportAttTable(cid){
+  FS.get('classes',cid).then(function(c){
+    var stuIds=c.students||[];
+    var dates=(c.dates||[]).slice().sort();
+    if(!dates.length){ toast('لا توجد أيام في الجدول','#ff3d6b',true); return; }
+    if(!stuIds.length){ toast('لا يوجد طلاب','#ff3d6b',true); return; }
+    var done=0; var rows=[];
+    stuIds.forEach(function(sid){
+      FS.get('students',sid).then(function(s){
+        if(s){
+          var row={'الاسم':s.name,'ID':s.id};
+          dates.forEach(function(d){
+            var v=(s.attendance||{})[d]||'';
+            row[d]=v==='P'?'حضر':v==='A'?'غاب':v==='?'?'لم يحضر الشهر':'—';
+          });
+          rows.push(row);
+        }
+        done++;
+        if(done===stuIds.length){
+          var ws=XLSX.utils.json_to_sheet(rows);
+          var wb=XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb,ws,c.name.slice(0,31));
+          dlXLSX(wb,'غياب-'+c.name+'.xlsx');
+          toast('تم تحميل جدول الغياب ✓');
+        }
+      });
+    });
+  });
 }
 
 // ── STUDENT DASHBOARD ──────────────────────────────────────
@@ -1385,7 +1588,7 @@ function loadStudent(){
       '<div class="stat-card c2"><div class="stat-val" style="color:#00ff88">'+pct+'%</div><div class="stat-lbl">نسبة الحضور</div></div>'+
       '<div class="stat-card c4"><div class="stat-val" style="color:#ff3d6b">'+abs+'</div><div class="stat-lbl">أيام الغياب</div></div>'+
       '<div class="stat-card c3"><div class="stat-val" style="color:#4d79ff">'+avgScore+'%</div><div class="stat-lbl">متوسط الدرجات</div></div>'+
-      '<div class="stat-card c1"><div class="stat-val" style="color:'+(s.paid?'#00ff88':'#ff3d6b')+'">'+(s.paid?'✓':'✕')+'</div><div class="stat-lbl">حالة الدفع</div></div>'+
+      '<div class="stat-card c1"><div class="stat-val" style="color:'+(payStatus(s,curMonth())==='paid'?'#00ff88':payStatus(s,curMonth())==='absent'?'#aaa':'#ff3d6b')+'">'+(payStatus(s,curMonth())==='paid'?'✓':payStatus(s,curMonth())==='absent'?'—':'✕')+'</div><div class="stat-lbl">دفع هذا الشهر</div></div>'+
       '</div>'+
       '<div class="tabs">'+
       '<div class="tab active" onclick="sTab(\'info\',this)">معلوماتي</div>'+
@@ -1419,10 +1622,17 @@ function loadStudent(){
 
 function buildStuInfoView(s,teacher,cls){
   var comms=s.comments||[];
+  var clsDates=(cls&&cls.dates)||[];
+  var m=curMonth(); var pst=payStatus(s,m);
   return '<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px;">'+
     '<div class="info-row"><span class="info-key">المعلم</span><span class="info-val">'+(teacher?teacher.name:'-')+'</span></div>'+
     '<div class="info-row"><span class="info-key">الفصل</span><span class="info-val">'+(cls?cls.name:'-')+'</span></div>'+
     '<div class="info-row"><span class="info-key">المادة</span><span class="info-val">'+(cls&&cls.subject?cls.subject:'-')+'</span></div>'+
+    '</div>'+
+    '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px;margin:10px 0;">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;">'+
+    '<span style="font-size:.8rem;font-weight:700;">💰 دفع '+monthLabel(m)+'</span>'+payChip(pst)+'</div>'+
+    '<div style="font-size:.7rem;color:var(--text3);margin-bottom:4px;">سجل الدفع الشهري</div>'+buildPayHistory(s,clsDates,null)+
     '</div>'+
     '<div style="margin-top:12px;"><div class="section-title">تعليقات المعلم</div>'+
     (comms.length?comms.map(function(c){return '<div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;font-size:.8rem;">'+c+'</div>';}).join(''):'<p class="empty-msg">لا توجد تعليقات</p>')+
@@ -1521,7 +1731,7 @@ function searchParent(){
         '<div class="info-row"><span class="info-key">الفصل</span><span class="info-val">'+(cls?cls.name:'-')+'</span></div>'+
         '<div class="info-row"><span class="info-key">نسبة الحضور</span><span class="info-val">'+pct+'%</span></div>'+
         '<div class="info-row"><span class="info-key">غياب</span><span class="info-val">'+av.filter(function(v){return v==='A';}).length+' يوم</span></div>'+
-        '<div class="info-row"><span class="info-key">الدفع</span><span class="info-val"><span class="chip '+(s.paid?'cg':'cr')+'">'+(s.paid?'دفع':'لم يدفع')+'</span></span></div>'+
+        '<div class="info-row"><span class="info-key">الدفع</span><span class="info-val">'+payChip(payStatus(s,curMonth()))+'</span></div>'+
         (exams.length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">الامتحانات</div>'+
         exams.map(function(e){return '<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.78rem;"><span>'+e.name+'</span><span>'+((s.scores||{})[e.id]||'-')+' / '+e.maxScore+'</span></div>';}).join('')+'</div>':'')+
         ((s.comments||[]).length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">تعليقات المعلم</div>'+
