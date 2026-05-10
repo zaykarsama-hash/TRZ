@@ -1149,24 +1149,26 @@ function showClassQR(cid){
   openModal(
     '<div class="modal-title">📱 QR الفصل <button class="close-btn" onclick="closeModal()">✕</button></div>'+
     '<p style="color:var(--text2);font-size:.82rem;margin-bottom:8px;">امسح الكود للتسجيل في الفصل</p>'+
-    '<div id="qr-box"></div>'+
-    '<p style="text-align:center;margin-top:8px;font-size:.75rem;color:var(--text3);">ID: '+cid+'</p>'
+    '<div id="qr-box" style="display:flex;justify-content:center;padding:14px;background:#fff;border-radius:12px;"></div>'+
+    '<p style="text-align:center;margin-top:8px;font-size:.75rem;color:var(--text3);">ID: '+cid+'</p>'+
+    '<button class="btn btn-success" style="margin-top:10px;" onclick="downloadQRBox(\'QR-Class-'+cid+'\')">📥 تحميل صورة الـ QR</button>'
   );
   setTimeout(function(){
     var el=document.getElementById('qr-box');
-    if(el){ el.innerHTML=''; new QRCode(el,{text:joinUrl,width:200,height:200}); }
+    if(el){ el.innerHTML=''; new QRCode(el,{text:joinUrl,width:220,height:220}); }
   },100);
 }
 
 function showStudentQR(sid){
   openModal(
     '<div class="modal-title">📱 QR الطالب <button class="close-btn" onclick="closeModal()">✕</button></div>'+
-    '<div id="qr-box"></div>'+
-    '<p style="text-align:center;margin-top:8px;font-size:.75rem;color:var(--text3);">'+sid+'</p>'
+    '<div id="qr-box" style="display:flex;justify-content:center;padding:14px;background:#fff;border-radius:12px;"></div>'+
+    '<p style="text-align:center;margin-top:8px;font-size:.75rem;color:var(--text3);">'+sid+'</p>'+
+    '<button class="btn btn-success" style="margin-top:10px;" onclick="downloadQRBox(\'QR-Student-'+sid+'\')">📥 تحميل صورة الـ QR</button>'
   );
   setTimeout(function(){
     var el=document.getElementById('qr-box');
-    if(el){ el.innerHTML=''; new QRCode(el,{text:'trz://student?sid='+sid,width:200,height:200}); }
+    if(el){ el.innerHTML=''; new QRCode(el,{text:'trz://student?sid='+sid,width:220,height:220}); }
   },100);
 }
 
@@ -1459,6 +1461,22 @@ function buildMatesView(mates,tid,exams){
   }).join('');
 }
 
+function downloadQRBox(filename){
+  var el=document.getElementById('qr-box');
+  if(!el){ toast('تعذّر التحميل','#ff3d6b',true); return; }
+  var canvas=el.querySelector('canvas');
+  var img=el.querySelector('img');
+  var src='';
+  if(canvas){ src=canvas.toDataURL('image/png'); }
+  else if(img){ src=img.src; }
+  if(!src){ toast('تعذّر التحميل','#ff3d6b',true); return; }
+  var a=document.createElement('a');
+  a.href=src; a.download=(filename||'QR')+'.png'; a.click();
+  toast('تم تحميل صورة الـ QR ✓');
+}
+
+function downloadMyQR(){ downloadQRBox('QR-'+CU.id); }
+
 function openMyQR(){
   openModal(
     '<div class="modal-title">📱 QR الخاص بي <button class="close-btn" onclick="closeModal()">✕</button></div>'+
@@ -1471,20 +1489,6 @@ function openMyQR(){
     var el=document.getElementById('qr-box');
     if(el){ el.innerHTML=''; new QRCode(el,{text:'trz://student?sid='+CU.id,width:220,height:220}); }
   },100);
-}
-
-function downloadMyQR(){
-  var el=document.getElementById('qr-box');
-  if(!el) return;
-  var img=el.querySelector('img');
-  var canvas=el.querySelector('canvas');
-  var src='';
-  if(canvas){ src=canvas.toDataURL('image/png'); }
-  else if(img){ src=img.src; }
-  if(!src){ toast('تعذّر التحميل','#ff3d6b',true); return; }
-  var a=document.createElement('a');
-  a.href=src; a.download='QR-'+CU.id+'.png'; a.click();
-  toast('تم تحميل صورة الـ QR ✓');
 }
 
 function sTab(tab,el){
@@ -1596,4 +1600,4 @@ renderLoginFields();
 handleQRJoin();
 </script>
 </body>
-    </html>
+  </html>
