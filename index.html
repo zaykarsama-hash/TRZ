@@ -1772,31 +1772,21 @@ function buildMatesView(mates,tid,exams){
 function downloadQRBox(filename){
   var el=document.getElementById('qr-box');
   if(!el){ toast('تعذّر التحميل','#ff3d6b',true); return; }
-  var canvas=el.querySelector('canvas');
-  var img=el.querySelector('img');
-  var src='';
-  if(canvas){
-    // رسم على خلفية بيضاء
-    var c2=document.createElement('canvas');
-    c2.width=canvas.width; c2.height=canvas.height;
-    var ctx=c2.getContext('2d');
-    ctx.fillStyle='#ffffff';
-    ctx.fillRect(0,0,c2.width,c2.height);
-    ctx.drawImage(canvas,0,0);
-    src=c2.toDataURL('image/png');
-  } else if(img){
-    // للصور: ارسم على canvas بخلفية بيضاء
-    var c3=document.createElement('canvas');
-    c3.width=img.naturalWidth||220; c3.height=img.naturalHeight||220;
-    var ctx3=c3.getContext('2d');
-    ctx3.fillStyle='#ffffff';
-    ctx3.fillRect(0,0,c3.width,c3.height);
-    ctx3.drawImage(img,0,0);
-    src=c3.toDataURL('image/png');
-  }
-  if(!src){ toast('تعذّر التحميل','#ff3d6b',true); return; }
+  var qrCanvas=el.querySelector('canvas');
+  var qrImg=el.querySelector('img');
+  var qrW=0,qrH=0,drawFn=null;
+  if(qrCanvas){ qrW=qrCanvas.width; qrH=qrCanvas.height; drawFn=function(ctx,x,y){ctx.drawImage(qrCanvas,x,y);}; }
+  else if(qrImg){ qrW=qrImg.naturalWidth||220; qrH=qrImg.naturalHeight||220; drawFn=function(ctx,x,y){ctx.drawImage(qrImg,x,y,qrW,qrH);}; }
+  if(!drawFn){ toast('تعذّر التحميل','#ff3d6b',true); return; }
+  var pad=Math.round(qrW*0.55);
+  var c=document.createElement('canvas');
+  c.width=qrW+pad*2; c.height=qrH+pad*2;
+  var ctx=c.getContext('2d');
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(0,0,c.width,c.height);
+  drawFn(ctx,pad,pad);
   var a=document.createElement('a');
-  a.href=src; a.download=(filename||'QR')+'.png'; a.click();
+  a.href=c.toDataURL('image/png'); a.download=(filename||'QR')+'.png'; a.click();
   toast('تم تحميل صورة الـ QR ✓');
 }
 
@@ -1933,4 +1923,4 @@ renderLoginFields();
 handleQRJoin();
 </script>
 </body>
-</html>
+  </html>
