@@ -1964,4 +1964,103 @@ function searchParent(){
     if(!s||s.status!=='active'){ el.innerHTML='<p style="color:#ff3d6b;text-align:center;">لم يتم العثور على طالب</p>'; return; }
     Promise.all([
       s.teacherId?FS.get('teachers',s.teacherId):Promise.resolve(null),
-  
+      s.classId?FS.get('classes',s.classId):Promise.resolve(null),
+      FS.query('exams','teacherId','==',s.teacherId||'x')
+    ]).then(function(r){
+      var teacher=r[0], cls=r[1], exams=r[2];
+      var av=Object.values(s.attendance||{});
+      var pct=av.length?Math.round(av.filter(function(v){return v==='P';}).length/av.length*100):0;
+      el.innerHTML='<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px;">'+
+        '<div style="font-size:.98rem;font-weight:700;margin-bottom:8px;">👤 '+s.name+'</div>'+
+        '<div class="info-row"><span class="info-key">المعلم</span><span class="info-val">'+(teacher?teacher.name:'-')+'</span></div>'+
+        '<div class="info-row"><span class="info-key">الفصل</span><span class="info-val">'+(cls?cls.name:'-')+'</span></div>'+
+        '<div class="info-row"><span class="info-key">نسبة الحضور</span><span class="info-val">'+pct+'%</span></div>'+
+        '<div class="info-row"><span class="info-key">غياب</span><span class="info-val">'+av.filter(function(v){return v==='A';}).length+' يوم</span></div>'+
+        '<div class="info-row"><span class="info-key">الدفع</span><span class="info-val">'+payChip(payStatus(s,curMonth()))+'</span></div>'+
+        (exams.length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">الامتحانات</div>'+
+        exams.map(function(e){return '<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.78rem;"><span>'+e.name+'</span><span>'+((s.scores||{})[e.id]||'-')+' / '+e.maxScore+'</span></div>';}).join('')+'</div>':'')+
+        ((s.comments||[]).length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">تعليقات المعلم</div>'+
+        s.comments.map(function(c){return '<div style="background:var(--bg3);border-radius:6px;padding:7px;margin-bottom:5px;font-size:.78rem;">'+c+'</div>';}).join('')+'</div>':'')+
+        (function(){
+          var res=teacher&&teacher.resources?teacher.resources:'';
+          if(!res) return '<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">📚 المواد التعليمية</div><p class="empty-msg" style="font-size:.76rem;">لا توجد مواد تعليمية بعد</p></div>';
+          var escaped=res.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          var linked=escaped.replace(/(https?:\/\/[^\s]+)/g,'<a href="$1" target="_blank" style="color:#00f5ff;word-break:break-all;">$1</a>');
+          return '<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">📚 المواد التعليمية</div>'+
+            '<div style="background:var(--bg3);border:1px solid var(--accent);border-radius:7px;padding:9px;font-size:.78rem;line-height:1.7;white-space:pre-wrap;word-break:break-word;">'+linked+'</div></div>';
+        })()+
+        '</div>';
+    });
+  });
+}
+
+// ── RATING ─────────────────────────────────────────────────
+function openRating(){
+  toggleSidebarStudent();
+  openModal(
+    '<div class="modal-title">⭐ تقييم المدرس <button class="close-btn" onclick="closeModal()">✕</button></div>'+
+    '<div class="stars">'+[1,2,3,4,5].map(function(i){return '<span class="star" id="star-'+i+'" onclick="setRating('+i+')">☆</span>';}).join('')+'</div>'+
+    '<div id="rat-val" style="text-align:center;color:#00f5ff;font-size:1rem;margin-bottom:8px;">0/5</div>'+
+    '<textarea class="inp" id="rat-comment" placeholder="تعليقك (اختياري)..."></textarea>'+
+    '<button class="btn btn-primary" onclick="submitRating()">إرسال</button>'
+  );
+  selRating=0;
+}
+function setRating(n){
+  selRating=n;
+  [1,2,3,4,5].forEach(function(i){ document.getElementById('star-'+i).textContent=i<=n?'⭐':'☆'; });
+  document.getElementById('rat-val').textContent=n+'/5';
+}
+function submitRating(){
+  if(!selRating){ toast('اختر تقييماً','#ff3d6b',true); return; }
+  var comment=(document.getElementById('rat-comment')||{}).value||'';
+  var tid=CU.teacherId;
+  FS.get('teachers',tid).then(function(t){
+    var rating=t.rating||[];
+    rating.push({rating:selRating,comment:comment.trim(),by:CU.name});
+    FS.update('teachers',tid,{rating:rating}).then(function(){
+      closeModal(); toast('شكراً على تقييمك ✓');
+    });
+  });
+}
+
+// ── TAB NAV ────────────────────────────────────────────────
+function tTab(tab,el){
+  ['home','classes','att','exams'].forEach(function(t){
+    document.getElementById('t-tab-'+t).style.display=t===tab?'':'none';
+  });
+  document.querySelectorAll('.bottom-nav .nav-item').forEach(function(n){n.classList.remove('active');});
+  el.classList.add('active');
+}
+
+// ── LOGOUT ─────────────────────────────────────────────────
+function doLogout(){
+  CU=null; showScreen('login');
+  document.getElementById('sb').classList.remove('open');
+  document.getElementById('ssb').classList.remove('open');
+  document.getElementById('sb-ov').classList.remove('open');
+  document.getElementById('ssb-ov').classList.remove('open');
+}
+
+// ── QR JOIN HANDLER (from class QR scan) ──────────────────
+function handleQRJoin(){
+  var params = new URLSearchParams(window.location.search);
+  if(params.get('join')==='1'){
+    var tid = params.get('tid')||'';
+    var cid = params.get('cid')||'';
+    // انتظر حتى يتحمل FB ثم افتح نافذة التسجيل
+    waitFS(function(){
+      selectRole('student');
+      showStudentReg(tid, cid, true);
+    });
+    // نظف الـ URL بدون إعادة تحميل
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+}
+
+// INIT
+renderLoginFields();
+handleQRJoin();
+</script>
+</body>
+</html>
