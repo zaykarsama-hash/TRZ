@@ -944,11 +944,23 @@ function setMonthlyPay(sid,cid,val,month){
         openStudentDetail(sid,cid);
       });
     } else {
-      payments[m]=val;
-      FS.update('students',sid,{payments:payments}).then(function(){
-        toast(val==='paid'?'✓ تم تسجيل الدفع':'تم إلغاء الدفع');
-        openStudentDetail(sid,cid);
-      });
+      // إذا كانت الحالة السابقة "absent" وتغيّرت — أعد أيام الشهر من '?' إلى ''
+      if((payments[m]==='absent') && val!=='absent'){
+        Object.keys(attendance).forEach(function(day){
+          if(day.slice(0,7)===m && attendance[day]==='?') attendance[day]='';
+        });
+        payments[m]=val;
+        FS.update('students',sid,{payments:payments,attendance:attendance}).then(function(){
+          toast(val==='paid'?'✓ تم تسجيل الدفع':'تم إلغاء الدفع');
+          openStudentDetail(sid,cid);
+        });
+      } else {
+        payments[m]=val;
+        FS.update('students',sid,{payments:payments}).then(function(){
+          toast(val==='paid'?'✓ تم تسجيل الدفع':'تم إلغاء الدفع');
+          openStudentDetail(sid,cid);
+        });
+      }
     }
   });
 }
@@ -1139,19 +1151,63 @@ function addAttDate(cid){
 }
 
 function removeAttDate(cid,d){
+  if(!confirm('حذف يوم '+d+' وحذف بيانات الحضور لجميع الطلاب في هذا اليوم؟')) return;
   FS.get('classes',cid).then(function(c){
     var dates=(c.dates||[]).filter(function(x){return x!==d;});
-    FS.update('classes',cid,{dates:dates}).then(function(){ renderAttTable(); });
+    // أولاً: احذف اليوم من الفصل
+    FS.update('classes',cid,{dates:dates}).then(function(){
+      // ثانياً: احذف بيانات هذا اليوم من كل طالب
+      var stuIds=c.students||[];
+      if(!stuIds.length){ renderAttTable(); return; }
+      var done=0;
+      stuIds.forEach(function(sid){
+        FS.get('students',sid).then(function(s){
+          if(s){
+            var att=s.attendance||{};
+            if(att.hasOwnProperty(d)){
+              delete att[d];
+              FS.update('students',sid,{attendance:att}).then(function(){
+                done++;
+                if(done===stuIds.length) renderAttTable();
+              });
+            } else {
+              done++;
+              if(done===stuIds.length) renderAttTable();
+            }
+          } else {
+            done++;
+            if(done===stuIds.length) renderAttTable();
+          }
+        });
+      });
+    });
   });
 }
 
 function toggleAtt(sid,date,cid){
+  // دائماً اقرأ من قاعدة البيانات مباشرة
   FS.get('students',sid).then(function(s){
     var att=s.attendance||{};
     var cur=att[date]||'';
-    if(cur==='?'){ toast('هذا الشهر مُعيَّن كـ "لم يحضر" — غيّر حالة الدفع أولاً','#ffb700',true); return; }
-    att[date]=cur===''?'P':cur==='P'?'A':'';
-    FS.update('students',sid,{attendance:att}).then(function(){ renderAttTable(); });
+    var m=date.slice(0,7);
+    var payments=s.payments||{};
+    // إذا كان '?' (لم يحضر الشهر) — نتجاهل القيد ونسمح بالتعديل
+    // وفي نفس الوقت نحدّث حالة الدفع إن كانت absent
+    var next=cur===''||cur==='?'?'P':cur==='P'?'A':'';
+    var updateData={attendance: Object.assign({},att,{[date]:next})};
+    if(payments[m]==='absent' && next==='P'){
+      // رفع حالة "لم يحضر" لأن الطالب سُجِّل حاضر
+      var newPay=Object.assign({},payments);
+      newPay[m]='unpaid';
+      // أعد باقي أيام الشهر من ? إلى ''
+      var newAtt=Object.assign({},att);
+      Object.keys(newAtt).forEach(function(d){
+        if(d.slice(0,7)===m && newAtt[d]==='?') newAtt[d]='';
+      });
+      newAtt[date]='P';
+      updateData={attendance:newAtt,payments:newPay};
+    }
+    FS.update('students',sid,updateData).then(function(){ renderAttTable(); });
   });
 }
 
@@ -1166,10 +1222,27 @@ function markAllPresent(cid){
       var stuIds=c.students||[]; var done2=0;
       if(!stuIds.length){ renderAttTable(); return; }
       stuIds.forEach(function(sid){
+        // اقرأ مباشرة من قاعدة البيانات
         FS.get('students',sid).then(function(s){
           var att=s.attendance||{};
-          if(!att[d] || att[d]==='') att[d]='P';
-          FS.update('students',sid,{attendance:att}).then(function(){
+          var m2=d.slice(0,7);
+          var monthPay=(s.payments||{})[m2]||'unpaid';
+          // تحضير الكل: الجميع يصبحون P بدون استثناء
+          // إذا كان الشهر "لم يحضر" — ارفع القيد أيضاً
+          var m2=d.slice(0,7);
+          var payments=s.payments||{};
+          var updateData={attendance:att};
+          att[d]='P';
+          if(payments[m2]==='absent'){
+            var newPay=Object.assign({},payments);
+            newPay[m2]='unpaid';
+            Object.keys(att).forEach(function(day){
+              if(day.slice(0,7)===m2 && att[day]==='?') att[day]='';
+            });
+            att[d]='P';
+            updateData={attendance:att, payments:newPay};
+          }
+          FS.update('students',sid,updateData).then(function(){
             done2++;
             if(done2===stuIds.length){ renderAttTable(); toast('تم تحضير الكل ✓'); }
           });
@@ -1405,11 +1478,16 @@ function stopQRCamera(){
   if(window._qrScanTick){ clearInterval(window._qrScanTick); window._qrScanTick=null; }
 }
 
+var _qrLastCode = '';
+var _qrCooldown = false;
+
 function startQRCamera(){
   var video = document.getElementById('qr-video');
   var canvas = document.getElementById('qr-canvas');
   var status = document.getElementById('qr-cam-status');
   if(!video||!canvas) return;
+  _qrLastCode = '';
+  _qrCooldown = false;
   navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}})
   .then(function(stream){
     _qrScanStream = stream;
@@ -1419,15 +1497,23 @@ function startQRCamera(){
     var ctx = canvas.getContext('2d');
     window._qrScanTick = setInterval(function(){
       if(!video||video.readyState!==4) return;
+      if(_qrCooldown) return; // في فترة الراحة بعد قراءة ناجحة
       canvas.width=video.videoWidth; canvas.height=video.videoHeight;
       ctx.drawImage(video,0,0,canvas.width,canvas.height);
       var img = ctx.getImageData(0,0,canvas.width,canvas.height);
       try{
         var code = window.jsQR ? window.jsQR(img.data,img.width,img.height) : null;
-        if(code && code.data){
-          clearInterval(window._qrScanTick); window._qrScanTick=null;
-          if(status) status.textContent='✅ تم قراءة الكود';
+        if(code && code.data && code.data !== _qrLastCode){
+          _qrLastCode = code.data;
+          _qrCooldown = true;
+          if(status) status.innerHTML = '✅ تم قراءة الكود — <span style="color:#00f5ff;">جاهز للطالب التالي خلال ثوانٍ...</span>';
           processScanFromQR(code.data);
+          // بعد 2.5 ثانية: امسح القراءة الأخيرة وعد للمراقبة
+          setTimeout(function(){
+            _qrLastCode = '';
+            _qrCooldown = false;
+            if(status) status.textContent = 'وجّه الكاميرا نحو QR الطالب التالي ▶';
+          }, 2500);
         }
       }catch(e){}
     },300);
@@ -1461,46 +1547,85 @@ function processAttendance(sid){
   var el=document.getElementById('qr-res');
   if(el) el.innerHTML='<div class="loader">جاري التحقق...</div>';
   waitFS(function(){
+    // دائماً اقرأ من قاعدة البيانات مباشرة
     FS.get('students',sid).then(function(s){
       if(!s){
         if(el) el.innerHTML='<div style="text-align:center;padding:14px;color:#ff3d6b;font-size:.95rem;font-weight:700;">⚠️ هذا الطالب غير موجود هنا</div>';
         return;
       }
-      // تحقق أن الطالب في أحد فصول هذا المعلم
+      // تحقق أن الطالب ينتمي لفصل هذا المعلم
       FS.query('classes','teacherId','==',CU.id).then(function(myClasses){
         var myClassIds = myClasses.map(function(c){return c.id;});
         if(!s.teacherId || s.teacherId!==CU.id || myClassIds.indexOf(s.classId)===-1){
           if(el) el.innerHTML='<div style="text-align:center;padding:14px;color:#ff3d6b;font-size:.95rem;font-weight:700;">⚠️ هذا الطالب غير موجود هنا</div>';
           return;
         }
-        // الطالب موجود — سجّل الحضور
         var today=new Date().toISOString().split('T')[0];
-        var att=s.attendance||{}; att[today]='P';
-        FS.update('students',sid,{attendance:att}).then(function(){
-          // تأكد أن اليوم موجود في قائمة الغياب
-          FS.get('classes',s.classId).then(function(cls){
-            if(cls){
-              var dates=cls.dates||[];
-              if(!dates.includes(today)) dates.push(today);
-              FS.update('classes',s.classId,{dates:dates});
-            }
+        var att=s.attendance||{};
+        var todayStatus=att[today]||'';
+        var m=today.slice(0,7);
+        var payments=s.payments||{};
+        var monthPay=payments[m]||'unpaid';
+
+        // إذا كان الطالب حاضراً فعلاً — لا تفعل شيئاً، فقط اعرض بياناته
+        if(todayStatus==='P'){
+          showScanResult(el, s, sid, today, '⚡ مسجل حضوره مسبقاً');
+          return;
+        }
+        // إذا كان الشهر مُعيَّن "لم يحضر" — أزل هذه الحالة أولاً ثم سجّل الحضور
+        var updatePayments = Promise.resolve();
+        if(monthPay==='absent'){
+          // ارفع حالة "لم يحضر" من الدفع لأن الطالب ظهر
+          payments[m]='unpaid';
+          // أعد أيام الشهر من '?' إلى '' حتى يمكن تسجيلها
+          Object.keys(att).forEach(function(day){
+            if(day.slice(0,7)===m && att[day]==='?') att[day]='';
           });
-          if(el) el.innerHTML=
-            '<div class="student-card" style="border-color:#00ff88;">'+
-            '<div class="stu-avatar" style="background:linear-gradient(135deg,#00ff88,#00c266);color:#000;">'+s.name[0]+'</div>'+
-            '<div class="stu-info"><div class="stu-name">'+s.name+'</div>'+
-            '<div class="stu-id">'+sid+' | '+s.phone+'</div>'+
-            '<div class="stu-badges">'+
-            payChip(payStatus(s,curMonth()))+
-            '<span class="ba">✓ حضر اليوم '+today+'</span></div></div></div>'+
-            '<div style="display:flex;gap:6px;margin-top:8px;">'+
-            '<button class="btn btn-sm btn-success" onclick="scanSetPay(\''+sid+'\',\'paid\')">✓ دفع</button>'+
-            '<button class="btn btn-sm btn-danger" onclick="scanSetPay(\''+sid+'\',\'unpaid\')">✕ لم يدفع</button>'+
-            '<button class="btn btn-sm" style="background:rgba(100,100,120,.25);color:var(--text2);" onclick="scanSetPay(\''+sid+'\',\'absent\')">🚫 لم يحضر</button></div>';
-          toast('✅ تم تسجيل حضور '+s.name);
+          updatePayments = FS.update('students',sid,{payments:payments,attendance:att});
+        }
+        // سجّل الحضور اليوم
+        updatePayments.then(function(){
+          // اقرأ من قاعدة البيانات مرة أخرى للحصول على أحدث بيانات
+          FS.get('students',sid).then(function(freshS){
+            var freshAtt=freshS.attendance||{};
+            freshAtt[today]='P';
+            FS.update('students',sid,{attendance:freshAtt}).then(function(){
+              // تأكد أن اليوم موجود في قائمة الفصل
+              FS.get('classes',s.classId).then(function(cls){
+                if(cls){
+                  var dates=cls.dates||[];
+                  if(!dates.includes(today)) dates.push(today);
+                  FS.update('classes',s.classId,{dates:dates});
+                }
+              });
+              // اقرأ أحدث نسخة من قاعدة البيانات للعرض
+              showScanResult(el, sid, today, '✅ تم تسجيل الحضور');
+              FS.get('students',sid).then(function(ds){ toast('✅ تم تسجيل حضور '+ds.name); });
+            });
+          });
         });
       });
     });
+  });
+}
+
+function showScanResult(el, sid, today, label){
+  if(!el) return;
+  FS.get('students',sid).then(function(fresh){
+    var pst=(fresh.payments||{})[curMonth()]||'unpaid';
+    el.innerHTML=
+      '<div class="student-card" style="border-color:#00ff88;">'+
+      '<div class="stu-avatar" style="background:linear-gradient(135deg,#00ff88,#00c266);color:#000;">'+fresh.name[0]+'</div>'+
+      '<div class="stu-info"><div class="stu-name">'+fresh.name+'</div>'+
+      '<div class="stu-id">'+sid+' | '+fresh.phone+'</div>'+
+      '<div class="stu-badges">'+
+      payChip(pst)+
+      '<span class="ba">'+label+' '+today+'</span></div></div></div>'+
+      '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">'+
+      '<button class="btn btn-sm btn-success" onclick="scanSetPay(\''+sid+'\',\'paid\')">✓ دفع</button>'+
+      '<button class="btn btn-sm btn-danger" onclick="scanSetPay(\''+sid+'\',\'unpaid\')">✕ لم يدفع</button>'+
+      '<button class="btn btn-sm" style="background:rgba(100,100,120,.25);color:var(--text2);" onclick="scanSetPay(\''+sid+'\',\'absent\')">🚫 لم يحضر</button></div>'+
+      '<div style="margin-top:8px;padding:7px 10px;background:rgba(0,245,255,.08);border:1px solid rgba(0,245,255,.3);border-radius:8px;font-size:.76rem;color:#00f5ff;text-align:center;">📷 الكاميرا جاهزة — وجّهها للطالب التالي</div>';
   });
 }
 
@@ -1542,7 +1667,21 @@ function togglePaidScan(sid){
 
 // ── EXPORT (Excel) ──────────────────────────────────────────
 function dlXLSX(wb, filename){
-  XLSX.writeFile(wb, filename);
+  try {
+    // طريقة Blob تعمل في كل المتصفحات
+    var wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+    var blob = new Blob([wbout], {type:'application/octet-stream'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 300);
+  } catch(e){
+    console.error('dlXLSX error:', e);
+    toast('خطأ في تحميل الملف: '+e.message, '#ff3d6b', true);
+  }
 }
 
 function exportClass(cid){
@@ -1550,7 +1689,8 @@ function exportClass(cid){
     var stuIds=c.students||[];
     if(!stuIds.length){ toast('لا يوجد طلاب','#ff3d6b',true); return; }
     FS.query('exams','teacherId','==',CU.id).then(function(allExams){
-      var exams = allExams.filter(function(e){ return e.classId===cid; });
+      // الامتحانات مرتبطة بمصفوفة classes وليس classId واحد
+      var exams = allExams.filter(function(e){ return (e.classes||[]).indexOf(cid)!==-1; });
       var done=0; var rows=[];
       stuIds.forEach(function(sid){
         FS.get('students',sid).then(function(s){
@@ -1824,103 +1964,4 @@ function searchParent(){
     if(!s||s.status!=='active'){ el.innerHTML='<p style="color:#ff3d6b;text-align:center;">لم يتم العثور على طالب</p>'; return; }
     Promise.all([
       s.teacherId?FS.get('teachers',s.teacherId):Promise.resolve(null),
-      s.classId?FS.get('classes',s.classId):Promise.resolve(null),
-      FS.query('exams','teacherId','==',s.teacherId||'x')
-    ]).then(function(r){
-      var teacher=r[0], cls=r[1], exams=r[2];
-      var av=Object.values(s.attendance||{});
-      var pct=av.length?Math.round(av.filter(function(v){return v==='P';}).length/av.length*100):0;
-      el.innerHTML='<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px;">'+
-        '<div style="font-size:.98rem;font-weight:700;margin-bottom:8px;">👤 '+s.name+'</div>'+
-        '<div class="info-row"><span class="info-key">المعلم</span><span class="info-val">'+(teacher?teacher.name:'-')+'</span></div>'+
-        '<div class="info-row"><span class="info-key">الفصل</span><span class="info-val">'+(cls?cls.name:'-')+'</span></div>'+
-        '<div class="info-row"><span class="info-key">نسبة الحضور</span><span class="info-val">'+pct+'%</span></div>'+
-        '<div class="info-row"><span class="info-key">غياب</span><span class="info-val">'+av.filter(function(v){return v==='A';}).length+' يوم</span></div>'+
-        '<div class="info-row"><span class="info-key">الدفع</span><span class="info-val">'+payChip(payStatus(s,curMonth()))+'</span></div>'+
-        (exams.length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">الامتحانات</div>'+
-        exams.map(function(e){return '<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:.78rem;"><span>'+e.name+'</span><span>'+((s.scores||{})[e.id]||'-')+' / '+e.maxScore+'</span></div>';}).join('')+'</div>':'')+
-        ((s.comments||[]).length?'<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">تعليقات المعلم</div>'+
-        s.comments.map(function(c){return '<div style="background:var(--bg3);border-radius:6px;padding:7px;margin-bottom:5px;font-size:.78rem;">'+c+'</div>';}).join('')+'</div>':'')+
-        (function(){
-          var res=teacher&&teacher.resources?teacher.resources:'';
-          if(!res) return '<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">📚 المواد التعليمية</div><p class="empty-msg" style="font-size:.76rem;">لا توجد مواد تعليمية بعد</p></div>';
-          var escaped=res.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-          var linked=escaped.replace(/(https?:\/\/[^\s]+)/g,'<a href="$1" target="_blank" style="color:#00f5ff;word-break:break-all;">$1</a>');
-          return '<div style="margin-top:8px;"><div class="section-title" style="font-size:.8rem;">📚 المواد التعليمية</div>'+
-            '<div style="background:var(--bg3);border:1px solid var(--accent);border-radius:7px;padding:9px;font-size:.78rem;line-height:1.7;white-space:pre-wrap;word-break:break-word;">'+linked+'</div></div>';
-        })()+
-        '</div>';
-    });
-  });
-}
-
-// ── RATING ─────────────────────────────────────────────────
-function openRating(){
-  toggleSidebarStudent();
-  openModal(
-    '<div class="modal-title">⭐ تقييم المدرس <button class="close-btn" onclick="closeModal()">✕</button></div>'+
-    '<div class="stars">'+[1,2,3,4,5].map(function(i){return '<span class="star" id="star-'+i+'" onclick="setRating('+i+')">☆</span>';}).join('')+'</div>'+
-    '<div id="rat-val" style="text-align:center;color:#00f5ff;font-size:1rem;margin-bottom:8px;">0/5</div>'+
-    '<textarea class="inp" id="rat-comment" placeholder="تعليقك (اختياري)..."></textarea>'+
-    '<button class="btn btn-primary" onclick="submitRating()">إرسال</button>'
-  );
-  selRating=0;
-}
-function setRating(n){
-  selRating=n;
-  [1,2,3,4,5].forEach(function(i){ document.getElementById('star-'+i).textContent=i<=n?'⭐':'☆'; });
-  document.getElementById('rat-val').textContent=n+'/5';
-}
-function submitRating(){
-  if(!selRating){ toast('اختر تقييماً','#ff3d6b',true); return; }
-  var comment=(document.getElementById('rat-comment')||{}).value||'';
-  var tid=CU.teacherId;
-  FS.get('teachers',tid).then(function(t){
-    var rating=t.rating||[];
-    rating.push({rating:selRating,comment:comment.trim(),by:CU.name});
-    FS.update('teachers',tid,{rating:rating}).then(function(){
-      closeModal(); toast('شكراً على تقييمك ✓');
-    });
-  });
-}
-
-// ── TAB NAV ────────────────────────────────────────────────
-function tTab(tab,el){
-  ['home','classes','att','exams'].forEach(function(t){
-    document.getElementById('t-tab-'+t).style.display=t===tab?'':'none';
-  });
-  document.querySelectorAll('.bottom-nav .nav-item').forEach(function(n){n.classList.remove('active');});
-  el.classList.add('active');
-}
-
-// ── LOGOUT ─────────────────────────────────────────────────
-function doLogout(){
-  CU=null; showScreen('login');
-  document.getElementById('sb').classList.remove('open');
-  document.getElementById('ssb').classList.remove('open');
-  document.getElementById('sb-ov').classList.remove('open');
-  document.getElementById('ssb-ov').classList.remove('open');
-}
-
-// ── QR JOIN HANDLER (from class QR scan) ──────────────────
-function handleQRJoin(){
-  var params = new URLSearchParams(window.location.search);
-  if(params.get('join')==='1'){
-    var tid = params.get('tid')||'';
-    var cid = params.get('cid')||'';
-    // انتظر حتى يتحمل FB ثم افتح نافذة التسجيل
-    waitFS(function(){
-      selectRole('student');
-      showStudentReg(tid, cid, true);
-    });
-    // نظف الـ URL بدون إعادة تحميل
-    window.history.replaceState({}, '', window.location.pathname);
-  }
-}
-
-// INIT
-renderLoginFields();
-handleQRJoin();
-</script>
-</body>
-  </html>
+  
